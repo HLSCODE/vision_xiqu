@@ -1,0 +1,85 @@
+"""Single gateway for robot motion commands and run-time safety limits."""
+
+from __future__ import annotations
+
+import time
+
+import numpy as np
+
+from app.config import SafetyConfig
+from robot.base import RobotInterface
+
+
+class SafetyViolation(RuntimeError):
+    """Raised when a requested robot command violates configured safeguards."""
+
+
+class SafetyManager:
+    """Apply speed, camera, timeout, and commanded-travel safety checks."""
+
+    def __init__(self, robot: RobotInterface, config: SafetyConfig) -> None:
+        self.robot = robot
+        self.config = config
+        self._align_started_at: float | None = None
+        self._travel_mm = np.zeros(2, dtype=np.float64)
+        self._last_velocity_time: float | None = None
+        self._camera_failures = 0
+
+    def begin_alignment(self) -> None:
+        self._align_started_at = time.monotonic()
+        self._travel_mm[:] = 0.0
+        self._last_velocity_time = time.monotonic()
+        self._camera_failures = 0
+
+    def alignment_elapsed_s(self) -> float:
+        return 0.0 if self._align_started_at is None else time.monotonic() - self._align_started_at
+
+    def report_camera_frame(self, frame_ok: bool) -> None:
+        self._camera_failures = 0 if frame_ok else self._camera_failures + 1
+        if self._camera_failures >= self.config.camera_failure_limit:
+            self.stop_all()
+            raise SafetyViolation(f"Camera failed for {self._camera_failures} consecutive frames")
+
+    def move_to_observe_pose(self) -> None:
+        self.robot.move_to_observe_pose()
+        self.robot.wait_until_stop()
+
+    def move_xy_relative(self, dx_mm: float, dy_mm: float) -> None:
+        """Execute a bounded calibration/Jog increment through the same safety gateway."""
+        increment = np.array([dx_mm, dy_mm], dtype=np.float64)
+        if float(np.linalg.norm(increment)) > self.config.max_xy_travel_mm:
+            raise SafetyViolation("Requested relative XY increment exceeds configured travel limit")
+        self.stop_xy()
+        self.robot.move_xy_relative(dx_mm, dy_mm)
+        self.robot.wait_until_stop()
+
+    def set_xy_velocity(self, velocity_mm_s: np.ndarray) -> None:
+        """Clamp the command and track the integrated, commanded XY travel."""
+        velocity = np.asarray(velocity_mm_s, dtype=np.float64)
+        if velocity.shape != (2,):
+            raise SafetyViolation("XY velocity must have exactly two components")
+        now = time.monotonic()
+        if self._last_velocity_time is not None:
+            self._travel_mm += velocity * max(0.0, now - self._last_velocity_time)
+        self._last_velocity_time = now
+        if float(np.linalg.norm(self._travel_mm)) > self.config.max_xy_travel_mm:
+            self.stop_xy()
+            raise SafetyViolation("Maximum commanded XY travel exceeded")
+        self.robot.set_xy_velocity(float(velocity[0]), float(velocity[1]))
+
+    def stop_xy(self) -> None:
+        self.robot.stop_xy()
+        self._last_velocity_time = time.monotonic()
+
+    def move_z_absolute(self, z_mm: float, speed_mm_s: float) -> None:
+        self.stop_xy()
+        self.robot.move_z_absolute(z_mm, speed_mm_s)
+        self.robot.wait_until_stop()
+
+    def move_z_relative(self, dz_mm: float, speed_mm_s: float) -> None:
+        self.stop_xy()
+        self.robot.move_z_relative(dz_mm, speed_mm_s)
+        self.robot.wait_until_stop()
+
+    def stop_all(self) -> None:
+        self.robot.stop_all()

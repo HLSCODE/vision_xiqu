@@ -1,0 +1,1 @@
+"""Electric suction tool adapters."""
