@@ -123,7 +123,7 @@ class OpenCVCamera:
             self._consumer_state.last_sequence = self._frame_sequence
             return self._latest_frame.copy()
 
-    def get_preview_frame(self, max_width: int = 1280, max_height: int = 900) -> np.ndarray | None:
+    def get_preview_frame(self, max_width: int = 1920, max_height: int = 1080) -> np.ndarray | None:
         """返回适合界面显示的缩放帧，避免反复复制 4024×3036 原图。"""
         if self._capture is None:
             raise RuntimeError("Camera is not open")

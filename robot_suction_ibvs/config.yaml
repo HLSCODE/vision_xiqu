@@ -13,9 +13,9 @@ vision:
   # 如果阴影也被识别，可把 V 上限从 80 调低到 50~70。
   hsv_lower: [0, 0, 0]
   hsv_upper: [179, 255, 80]
-  min_area_px: 500.0
+  min_area_px: 100.0
   morphology_kernel: 3
-  size_threshold_px: 2000.0
+  size_threshold_px: 200.0
 
 tracking:
   max_distance_px: 80.0
@@ -30,7 +30,8 @@ ibvs:
   max_align_time_s: 15.0
   error_growth_frames: 10
   slowdown_error_px: 10.0
-  max_acceleration_mm_s2: 20.0 
+  max_acceleration_mm_s2: 20.0
+  servo_A_path: data/servo_A.npy
 
 robot:
   # Replace these six values to match the pose format expected by the real robot SDK.
