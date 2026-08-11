@@ -8,7 +8,7 @@ from dataclasses import dataclass, replace
 import numpy as np
 from PyQt6.QtCore import QThread, pyqtSignal
 
-from app.config import VisionConfig
+from app.config import AppConfig, VisionConfig
 from vision.detector import HSVObjectDetector
 from vision.models import DetectedObject
 
@@ -17,6 +17,7 @@ from vision.models import DetectedObject
 class PreviewDetection:
     """一帧预览图像的检测结果，坐标均属于预览图像。"""
 
+    frame_bgr: np.ndarray
     objects: list[DetectedObject]
     valid_indices: frozenset[int]
     frame_width: int
@@ -33,9 +34,11 @@ class PreviewDetectionWorker(QThread):
     detections_ready = pyqtSignal(object)
     detection_failed = pyqtSignal(str)
 
-    def __init__(self, vision_config: VisionConfig, parent=None) -> None:
+    def __init__(self, config: AppConfig, parent=None) -> None:
         super().__init__(parent)
-        self._vision_config = vision_config
+        self._vision_config = config.vision
+        self._intrinsic_path = config.path(config.camera.intrinsic_path)
+        self._enable_undistort = config.camera.enable_undistort
         self._condition = threading.Condition()
         self._pending: tuple[np.ndarray, tuple[int, int]] | None = None
         self._stop_requested = False
@@ -80,16 +83,22 @@ class PreviewDetectionWorker(QThread):
                 key = (frame_width, frame_height, source_width, source_height)
                 if detector is None or key != detector_key:
                     detector = HSVObjectDetector(
-                        self._scaled_config(frame_width, frame_height, source_width, source_height)
+                        self._scaled_config(frame_width, frame_height, source_width, source_height),
+                        intrinsic_path=self._intrinsic_path,
+                        enable_undistort=self._enable_undistort,
+                        expected_image_size=(source_width, source_height),
+                        processing_image_size=(frame_width, frame_height),
                     )
                     detector_key = key
 
                 result = detector.detect(frame)
+                processed_frame = detector.preprocess(frame)
                 valid_indices = frozenset(
                     obj.index for obj in detector.valid_objects(result.objects)
                 )
                 self.detections_ready.emit(
                     PreviewDetection(
+                        frame_bgr=processed_frame,
                         objects=result.objects,
                         valid_indices=valid_indices,
                         frame_width=frame_width,

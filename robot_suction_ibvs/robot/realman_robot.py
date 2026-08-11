@@ -271,6 +271,29 @@ class RealRobot(RobotInterface):
             float(pose[5]),
         ]
 
+    def get_current_work_frame_name(self) -> str:
+        """读取当前工作坐标系名称，用于阻止标定与运行坐标系不一致。"""
+        name, _ = self._get_current_work_frame()
+        return name
+
+    def get_current_work_frame_pose(self) -> Sequence[float]:
+        """返回当前工作坐标系相对基坐标系的 SDK 位姿（m/rad）。"""
+        _, pose = self._get_current_work_frame()
+        return pose
+
+    def _get_current_work_frame(self) -> tuple[str, list[float]]:
+        arm = self._require_connected()
+        code, frame = arm.rm_get_current_work_frame()
+        self._check_code("读取当前工作坐标系", code)
+        name = str(frame.get("name", "")).strip("\x00 ") if isinstance(frame, dict) else ""
+        pose = frame.get("pose") if isinstance(frame, dict) else None
+        if not name or not isinstance(pose, list) or len(pose) != 6:
+            raise RealManSDKError(f"机械臂返回无效工作坐标系：{frame!r}")
+        values = [float(value) for value in pose]
+        if not all(math.isfinite(value) for value in values):
+            raise RealManSDKError(f"机械臂返回非有限工作坐标系位姿：{pose!r}")
+        return name, values
+
     def is_moving(self) -> bool:
         """通过当前轨迹类型判断规划运动是否仍在执行。"""
         arm = self._require_connected()

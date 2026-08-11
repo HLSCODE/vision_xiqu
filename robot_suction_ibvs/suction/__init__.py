@@ -1,1 +1,1 @@
-"""Electric suction tool adapters."""
+"""Suction and liquid-aspiration tool adapters."""

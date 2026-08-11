@@ -14,15 +14,53 @@ from vision.models import DetectedObject, DetectionResult
 class HSVObjectDetector:
     """Detect static objects using the HSV range configured in ``config.yaml``."""
 
-    def __init__(self, config: VisionConfig, intrinsic_path: Path | None = None, enable_undistort: bool = False) -> None:
+    def __init__(
+        self,
+        config: VisionConfig,
+        intrinsic_path: Path | None = None,
+        enable_undistort: bool = False,
+        expected_image_size: tuple[int, int] | None = None,
+        processing_image_size: tuple[int, int] | None = None,
+    ) -> None:
         self.config = config
         self._camera_matrix: np.ndarray | None = None
         self._dist_coeffs: np.ndarray | None = None
-        if enable_undistort and intrinsic_path is not None and intrinsic_path.exists():
-            # 内参缺失时保持原图处理，保证畸变校正是可选能力。
-            with np.load(intrinsic_path) as data:
-                self._camera_matrix = data["camera_matrix"]
-                self._dist_coeffs = data["dist_coeffs"]
+        if not enable_undistort:
+            return
+        if intrinsic_path is None or not intrinsic_path.exists():
+            raise FileNotFoundError(f"畸变校正已启用，但相机内参文件不存在：{intrinsic_path}")
+        with np.load(intrinsic_path, allow_pickle=False) as data:
+            required = {"camera_matrix", "dist_coeffs", "image_size"}
+            missing = sorted(required.difference(data.files))
+            if missing:
+                raise ValueError(f"相机内参文件缺少字段：{', '.join(missing)}")
+            matrix = np.asarray(data["camera_matrix"], dtype=np.float64)
+            dist_coeffs = np.asarray(data["dist_coeffs"], dtype=np.float64)
+            calibrated_size_values = np.asarray(data["image_size"]).reshape(-1)
+        if matrix.shape != (3, 3) or not np.all(np.isfinite(matrix)):
+            raise ValueError("camera_matrix must be a finite 3x3 matrix")
+        if dist_coeffs.size < 4 or not np.all(np.isfinite(dist_coeffs)):
+            raise ValueError("dist_coeffs must contain at least four finite coefficients")
+        if calibrated_size_values.size != 2:
+            raise ValueError("camera intrinsic image_size must contain [width, height]")
+        calibrated_size = tuple(int(value) for value in calibrated_size_values)
+        if any(value <= 0 for value in calibrated_size):
+            raise ValueError(f"camera intrinsic image_size is invalid: {calibrated_size!r}")
+        source_size = calibrated_size if expected_image_size is None else tuple(expected_image_size)
+        if source_size != calibrated_size:
+            raise ValueError(
+                f"相机内参分辨率 {calibrated_size} 与当前采集分辨率 {source_size} 不一致"
+            )
+        target_size = source_size if processing_image_size is None else tuple(processing_image_size)
+        if any(value <= 0 for value in target_size):
+            raise ValueError(f"processing_image_size is invalid: {target_size!r}")
+        scale_x = target_size[0] / source_size[0]
+        scale_y = target_size[1] / source_size[1]
+        scaled_matrix = matrix.copy()
+        scaled_matrix[0, :] *= scale_x
+        scaled_matrix[1, :] *= scale_y
+        self._camera_matrix = scaled_matrix
+        self._dist_coeffs = dist_coeffs
 
     @property
     def undistortion_enabled(self) -> bool:

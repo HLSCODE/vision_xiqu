@@ -8,8 +8,8 @@
 4. 到达目标正上方后不再读取目标位置，仅执行 Z 下降、吸取、抬升；
 5. 目标丢失、超时或安全异常时，停止运动并回到观察位重新检测。
 
-机械臂动作均经 ``SafetyManager`` 下发，吸盘操作均经 ``SuctionController``
-下发，因此算法层不依赖具体机械臂、相机或 GPIO/PLC SDK。
+机械臂动作均经 ``SafetyManager`` 下发，吸取操作均经 ``SuctionController``
+下发，因此算法层不依赖具体机械臂、相机或 ADP 串口实现。
 """
 
 from __future__ import annotations
@@ -40,16 +40,16 @@ class SuctionRobotController:
     - 一旦进入 ``ALIGN_IBVS``，目标已经锁定，不允许因为其他目标更近而切换；
     - 目标仍可见时必须连续多帧到达预对准点，之后才允许一次受限终末 XY 移动；
     - ``DESCEND`` 前必须完成终末 XY 规划运动，下降期间不再执行 XY 视觉控制；
-    - 任意异常都必须停止机械臂并关闭吸盘。
+    - 任意异常都必须停止机械臂并结束当前吸取软件状态。
 
     Args:
         config: 所有运行参数，包括视觉、IBVS、Z 轴与安全限制。
         camera: 返回 BGR 图像帧的相机适配器。
         detector: HSV 轮廓检测器。
         safety: 机器人动作的唯一安全入口。
-        suction: 吸盘开关适配器。
+        suction: 吸取执行器适配器；当前真实实现为 ADP 定量吸液枪。
         ibvs: 将像素误差转换为 XY 速度的控制器。
-        suction_ref_px: 吸盘轴线对准目标时的虚拟图像像素坐标 ``[u*, v*]``；
+        suction_ref_px: 吸管轴线对准目标时的虚拟图像像素坐标 ``[u*, v*]``；
             即使该位置会被吸管遮住，这个标定坐标仍然有效。
         session: 文本日志与可选 CSV 记录器。
     """
@@ -71,7 +71,7 @@ class SuctionRobotController:
         self.safety = safety
         self.suction = suction
         self.ibvs = ibvs
-        # 吸盘参考像素来自标定文件，不能用图像中心替代。它可以位于吸管遮挡区内，
+        # 吸管参考像素来自标定文件，不能用图像中心替代。它可以位于吸管遮挡区内，
         # 只作为“最终应到达的位置”参与计算，不要求运行时真的检测到该位置的目标。
         self.suction_ref_px = np.asarray(suction_ref_px, dtype=np.float64)
         if self.suction_ref_px.shape != (2,) or not np.all(np.isfinite(self.suction_ref_px)):
@@ -104,6 +104,7 @@ class SuctionRobotController:
         self.session = session
         self.logger: logging.Logger = session.logger
         self.state = SystemState.INIT
+        self.last_transition_reason = ""
         # target/last_center 只保存当前锁定目标，不维护长期的多目标 ID。
         # 本系统的目标静止、IBVS 距离短，因此只需简单最近邻关联即可。
         self.target: DetectedObject | None = None
@@ -117,6 +118,8 @@ class SuctionRobotController:
         self._lost_frames = 0
         # growth_frames 用于发现误差持续扩大（例如 A 矩阵方向错误或目标关联错误）。
         self._growth_frames = 0
+        # 全局观察必须连续多帧为空才结束任务，避免一次曝光波动或轮廓漏检提前完成。
+        self._empty_scene_frames = 0
         self._previous_error_norm: float | None = None
         # 达到预对准点后，用最后一帧目标中心计算一次终末位置移动；进入下降前即清空。
         self._final_approach_xy_mm: np.ndarray | None = None
@@ -132,6 +135,7 @@ class SuctionRobotController:
         """
         self.logger.info("STATE %s -> %s %s", self.state.name, new_state.name, reason)
         self.state = new_state
+        self.last_transition_reason = reason
 
     def step(self) -> None:
         """执行当前状态的一次处理；本函数不负责无限循环。
@@ -160,24 +164,46 @@ class SuctionRobotController:
         except SafetyViolation as exc:
             # 安全限制触发时可尝试回观察位重新开始，不直接继续当前对准动作。
             self.logger.error("Safety violation: %s", exc)
-            self.suction.off()
-            self.transition(SystemState.RECOVER, str(exc))
+            cleanup_failures = self._best_effort_stop_and_suction_off()
+            if cleanup_failures:
+                self.transition(SystemState.ERROR, f"{exc}; safety cleanup failed: {'; '.join(cleanup_failures)}")
+            else:
+                self.transition(SystemState.RECOVER, str(exc))
         except Exception as exc:
-            # 未预期的相机/机械臂/吸盘 SDK 异常不能恢复性地继续运动，必须进入 ERROR。
+            # 未预期的相机/机械臂/ADP 串口异常不能恢复性地继续运动，必须进入 ERROR。
             self.logger.exception("Unhandled controller error: %s", exc)
+            cleanup_failures = self._best_effort_stop_and_suction_off()
+            reason = str(exc)
+            if cleanup_failures:
+                reason += "; cleanup failed: " + "; ".join(cleanup_failures)
+            self.transition(SystemState.ERROR, reason)
+
+    def _best_effort_stop_and_suction_off(self) -> list[str]:
+        """Run independent safety cleanup actions without masking the original failure."""
+        failures: list[str] = []
+        try:
             self.safety.stop_all()
+        except Exception as cleanup_exc:
+            failures.append(f"stop_all: {cleanup_exc}")
+            self.logger.exception("Failed to stop robot during cleanup")
+        try:
             self.suction.off()
-            self.transition(SystemState.ERROR, str(exc))
+        except Exception as cleanup_exc:
+            failures.append(f"suction.off: {cleanup_exc}")
+            self.logger.exception("Failed to switch suction off during cleanup")
+        self._suction_started_at = None
+        return failures
 
     def emergency_stop(self, reason: str) -> None:
         """由操作员、Ctrl+C 或步数限制触发的急停。
 
-        ``stop_all`` 必须先执行，确保已下发的 XY 速度不再继续；随后关闭吸盘。
+        ``stop_all`` 必须先执行，确保已下发的 XY 速度不再继续；随后结束吸取软件状态。
         急停为终止状态，不会像 ``RECOVER`` 一样自动再次执行全局检测。
         """
         self.logger.warning("EMERGENCY STOP: %s", reason)
-        self.safety.stop_all()
-        self.suction.off()
+        cleanup_failures = self._best_effort_stop_and_suction_off()
+        if cleanup_failures:
+            reason += "; cleanup failed: " + "; ".join(cleanup_failures)
         self.transition(SystemState.EMERGENCY_STOP, reason)
 
     def _get_detection(self) -> list[DetectedObject] | None:
@@ -213,9 +239,14 @@ class SuctionRobotController:
         objects = data
         valid = self.detector.valid_objects(objects)
         if not valid:
-            # 全局观察位没有合格尺寸目标，当前批次任务完成。
-            self.transition(SystemState.FINISHED, "no size-eligible targets at observation pose")
+            self._empty_scene_frames += 1
+            if self._empty_scene_frames >= self.config.tracking.empty_scene_confirm_frames:
+                self.transition(
+                    SystemState.FINISHED,
+                    f"no size-eligible targets for {self._empty_scene_frames} consecutive frames",
+                )
             return
+        self._empty_scene_frames = 0
         # 尺寸合格的候选中，优先选择距预对准点最近的一个，以缩短可见区 IBVS 行程。
         # 该规则只决定“先吸哪个”，不会改变尺寸是否允许吸取的判断。
         self._candidate = self.tracker.select_nearest_reference(valid, self.prealign_ref_px)
@@ -288,7 +319,7 @@ class SuctionRobotController:
             self.safety.stop_xy()
             self.transition(SystemState.RECOVER, "IBVS error increased repeatedly")
             return
-        if np.all(np.abs(command.error_px) < self.config.ibvs.pixel_tolerance):
+        if command.error_norm_px <= self.config.ibvs.pixel_tolerance:
             # 必须连续多帧满足容差，避免由单帧噪声触发下降。
             self._stable_frames += 1
         else:
@@ -352,32 +383,43 @@ class SuctionRobotController:
             self.safety.move_z_absolute(self.config.robot.pick_z_mm, self.config.robot.z_down_speed_mm_s)
         elif self.config.robot.z_mode == "relative":
             # 相对模式以观察高度为基准计算下降距离，避免依赖机器人绝对 Z 原点。
-            self.safety.move_z_relative(self.config.robot.pick_z_mm - self.config.robot.observe_z_mm, self.config.robot.z_down_speed_mm_s)
+            self.safety.move_z_relative(
+                self.config.robot.pick_z_mm - self.config.robot.observe_z_mm,
+                self.config.robot.z_down_speed_mm_s,
+            )
         else:
             raise ValueError("robot.z_mode must be 'absolute' or 'relative'")
         self.transition(SystemState.SUCTION, "reached taught pickup height")
 
     def _handle_suction(self) -> None:
-        """开启吸盘并等待设定保持时间，确保负压建立后再抬升。"""
+        """发送一次 ADP 定量吸液命令并等待设定保持时间后再抬升。"""
         if self._suction_started_at is None:
             self.suction.on()
+            if not self.suction.is_on():
+                raise RuntimeError("ADP吸液命令已发送，但软件命令状态未确认")
             # 不阻塞主循环，下一周期按保持时间判断是否可以抬升。
             self._suction_started_at = time.monotonic()
             self.logger.info("Suction hold started")
             return
+        if not self.suction.is_on():
+            raise RuntimeError("吸取保持阶段检测到ADP软件命令状态已被停止")
         if time.monotonic() - self._suction_started_at >= self.config.suction.hold_time_s:
-            self.pick_count += 1
             self._suction_started_at = None
-            self.transition(SystemState.LIFT, f"suction hold complete; picks={self.pick_count}")
+            self.transition(SystemState.LIFT, "suction hold complete")
 
     def _handle_lift(self) -> None:
-        """将吸取后的目标抬至安全高度，并关闭吸盘。"""
+        """将吸取后的目标抬至安全高度，并结束本轮 ADP 软件保持状态。"""
         if self.config.robot.z_mode == "absolute":
             self.safety.move_z_absolute(self.config.robot.safe_z_mm, self.config.robot.z_up_speed_mm_s)
         else:
-            self.safety.move_z_relative(self.config.robot.safe_z_mm - self.config.robot.pick_z_mm, self.config.robot.z_up_speed_mm_s)
+            self.safety.move_z_relative(
+                self.config.robot.safe_z_mm - self.config.robot.pick_z_mm,
+                self.config.robot.z_up_speed_mm_s,
+            )
         self.suction.off()
-        self.transition(SystemState.RETURN_OBSERVE, "object lifted")
+        # 只有抬升和结束本轮吸取状态都完成后才计为一次完整吸取，失败的中途动作不计数。
+        self.pick_count += 1
+        self.transition(SystemState.RETURN_OBSERVE, f"object lifted; picks={self.pick_count}")
 
     def _handle_return_observe(self) -> None:
         """回固定观察位，清除锁定目标，再处理下一批静止目标。"""
@@ -385,6 +427,7 @@ class SuctionRobotController:
         self.target = None
         self.last_center_px = None
         self._final_approach_xy_mm = None
+        self._empty_scene_frames = 0
         self.transition(SystemState.GLOBAL_DETECT, "returned to observe pose")
 
     def _handle_recover(self) -> None:
@@ -393,11 +436,13 @@ class SuctionRobotController:
         该状态与 ``ERROR`` 的差异是：它会在完成停止与回观察位后重新检测；
         ``ERROR`` 则终止本次任务并等待人工处理。
         """
-        # 目标丢失、超时或安全异常：停止、关吸盘、回观察位，再重新做全局检测。
+        # 目标丢失、超时或安全异常：停止、结束吸取状态、回观察位，再重新做全局检测。
         self.safety.stop_all()
         self.suction.off()
         self.target = None
         self.last_center_px = None
         self._final_approach_xy_mm = None
+        self._empty_scene_frames = 0
+        self._suction_started_at = None
         self.safety.move_to_observe_pose()
         self.transition(SystemState.GLOBAL_DETECT, "recovery at observe pose")

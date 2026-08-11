@@ -56,7 +56,16 @@ class IBVSController:
     def compute(self, current_pixel_px: np.ndarray, reference_pixel_px: np.ndarray, dt_s: float) -> IBVSCommand:
         """Calculate a slew-rate-limited XY command from current image centre."""
         error = np.asarray(current_pixel_px, dtype=np.float64) - np.asarray(reference_pixel_px, dtype=np.float64)
+        if error.shape != (2,) or not np.all(np.isfinite(error)):
+            raise ValueError("current and reference pixels must form a finite 2D error")
         error_norm = float(np.linalg.norm(error))
+        if error_norm <= self.config.pixel_tolerance:
+            # 容差判定与状态机统一使用误差向量的欧氏距离。进入容差时必须立即输出
+            # 精确零速度；停止不能再经过加速度斜率限制，否则稳定帧期间仍会运动。
+            velocity = np.zeros(2, dtype=np.float64)
+            self._last_velocity_mm_s = velocity.copy()
+            return IBVSCommand(velocity_mm_s=velocity, error_px=error, error_norm_px=error_norm)
+
         # A 的单位为 px/mm，因此 A^{-1}@error 的单位为 mm；负号使误差朝零收敛。
         velocity = -self.config.gain * (self.A_inverse_mm_per_px @ error)
 
@@ -69,10 +78,6 @@ class IBVSController:
             velocity *= self.config.max_velocity_mm_s / speed
         if self.config.min_velocity_mm_s > 0 and 0 < speed < self.config.min_velocity_mm_s:
             velocity *= self.config.min_velocity_mm_s / speed
-        if error_norm <= self.config.pixel_tolerance:
-            # 对准判定由状态机连续多帧完成；这里先保证单帧进入容差就不再产生 XY 速度。
-            velocity[:] = 0.0
-
         # 相邻控制周期的速度变化受加速度上限约束，形成简单的 slew-rate limiter。
         max_delta = self.config.max_acceleration_mm_s2 * max(dt_s, 1e-3)
         delta = velocity - self._last_velocity_mm_s

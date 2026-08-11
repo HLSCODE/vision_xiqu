@@ -1,4 +1,4 @@
-"""Vendor-neutral electric suction controller interface."""
+"""Vendor-neutral suction/aspiration controller interface."""
 
 from __future__ import annotations
 
@@ -6,7 +6,10 @@ from abc import ABC, abstractmethod
 
 
 class SuctionController(ABC):
-    """Actuate vacuum only through this intentionally small contract."""
+    """Actuate the configured suction or aspiration device through one small contract."""
+
+    @abstractmethod
+    def connect(self) -> None: ...
 
     @abstractmethod
     def on(self) -> None: ...
@@ -15,7 +18,9 @@ class SuctionController(ABC):
     def off(self) -> None: ...
 
     @abstractmethod
-    def is_on(self) -> bool: ...
+    def is_on(self) -> bool:
+        """Return True only when vacuum output/feedback is valid for holding an object."""
+        ...
 
     @abstractmethod
     def close(self) -> None: ...

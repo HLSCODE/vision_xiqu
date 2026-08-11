@@ -23,7 +23,12 @@ def main() -> int:
     args = parser.parse_args()
     config = load_config(args.config)
     camera = OpenCVCamera(config.camera)
-    detector = HSVObjectDetector(config.vision, config.path(config.camera.intrinsic_path), config.camera.enable_undistort)
+    detector = HSVObjectDetector(
+        config.vision,
+        config.path(config.camera.intrinsic_path),
+        config.camera.enable_undistort,
+        expected_image_size=(config.camera.width, config.camera.height),
+    )
     camera.open()
     print("绿色表示尺寸合格，橙色表示尺寸超限。按 Q/Esc 退出。")
     try:
@@ -34,7 +39,7 @@ def main() -> int:
             result = detector.detect(frame)
             valid = detector.valid_objects(result.objects)
             valid_indices = frozenset(obj.index for obj in valid)
-            overlay = draw_detection_overlay(frame, result.objects, valid_indices)
+            overlay = draw_detection_overlay(detector.preprocess(frame), result.objects, valid_indices)
             cv2.imshow("Detection inspection", overlay)
             cv2.imshow("HSV mask", result.mask)
             if cv2.waitKey(1) & 0xFF in (ord("q"), 27):

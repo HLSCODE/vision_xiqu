@@ -80,7 +80,7 @@ class MainWindow(QMainWindow):
         self.setStyleSheet(APP_STYLE)
         self._build_ui()
 
-        self.detection_worker = PreviewDetectionWorker(config.vision, self)
+        self.detection_worker = PreviewDetectionWorker(config, self)
         self.detection_worker.detections_ready.connect(self._on_detections_ready)
         self.detection_worker.detection_failed.connect(self._on_detection_failed)
         self.detection_worker.start()
@@ -246,7 +246,7 @@ class MainWindow(QMainWindow):
             and time.monotonic() - self._detection_updated_at <= 1.0
         ):
             display_frame = draw_detection_overlay(
-                frame,
+                detection.frame_bgr,
                 detection.objects,
                 detection.valid_indices,
             )

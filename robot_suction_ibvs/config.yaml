@@ -3,14 +3,13 @@
 
 camera:
   # 请求相机输出的原始图像宽度，单位 px。相机不支持时，OpenCV 可能退回其他宽度。
-  width: 3840
+  width: 3264
   # 请求相机输出的原始图像高度，单位 px。所有像素标定必须对应实际采集分辨率。
-  height: 2160
+  height: 2448
   # 请求采集帧率，单位 FPS；实际帧率受相机、USB 带宽和曝光时间影响。
   fps: 30
   # OpenCV 视频源。Ubuntu 可填写 /dev/video6，也可填写整数索引（如 0）。
   device_id: "/dev/video6"
-  # 视频文件或 RTSP 地址；为 null 时使用 device_id，非 null 时优先使用这里的地址。
   video_path: null
   # 是否在控制器的原始图像检测前使用相机内参进行畸变校正。
   enable_undistort: false
@@ -39,6 +38,8 @@ tracking:
   max_distance_px: 80.0
   # 锁定目标允许连续丢失的最大帧数；每次丢失都会先停止XY，达到此值后进入恢复状态。
   max_lost_frames: 5
+  # 全局观察时必须连续多少帧都没有可吸目标才判定任务完成，避免单帧漏检提前结束。
+  empty_scene_confirm_frames: 10
 
 ibvs:
   # IBVS比例增益，控制公式为 v=-gain*inv(A)*像素误差，量纲可理解为 1/s。
@@ -58,8 +59,17 @@ ibvs:
   error_growth_frames: 10
   # 减速区半径，单位为原始图像 px；误差小于该值时速度按比例减小，0表示关闭减速区。
   slowdown_error_px: 10.0
+  # 相邻控制周期允许的 XY 合速度变化率上限，单位 mm/s²，用于抑制速度突变。
   max_acceleration_mm_s2: 20.0
+  # 固定观察高度下标定的像素/毫米二维映射矩阵；同时要求存在同名 .json 元数据文件。
   servo_A_path: data/servo_A.npy
+  # 无遮挡预对准位置相对于吸管轴线对准位置的图像偏移 [du,dv]，单位为原图 px。
+  # 初始零值仅用于让标定工具启动，未确认时自动吸取仍会被控制器拒绝。
+  prealign_offset_px: [0.0, 0.0]
+  # 完成实测并确认目标在预对准点完整可见后，才允许改为 true。
+  prealign_offset_confirmed: false
+  # 从可见预对准点到吸管轴线正上方的终末盲移最大长度，单位 mm。
+  final_approach_max_mm: 10.0
 
 robot:
   # 睿尔曼机械臂控制器IP，运行电脑必须与它处于可通信的同一网段。
@@ -98,11 +108,33 @@ robot:
   z_up_speed_mm_s: 5.0
 
 suction:
-  # 开启吸盘后等待负压建立的保持时间，单位 s；达到该时间后才开始抬升。
-  hold_time_s: 0.5
-  # 吸盘轴线与目标对准时，目标在原始图像中的参考像素 [u_ref,v_ref] 文件。
-  # 由 calibration/calibrate_prealign.py 的对准位采样生成；必须与servo_A使用相同分辨率、观察高度和末端姿态。
+  # ADP吸液命令发出后等待的保持时间，单位 s；原实现示例等待1秒后再执行后续动作。
+  # 如果配置了吸液速度，应确保该值不小于 absorb_volume_ul / absorb_speed_ul_s。
+  hold_time_s: 1.0
+  # 吸管轴线与目标对准时，目标在原始图像中的参考像素 [u_ref,v_ref] 文件。
+  # 由 calibration/calibrate_prealign.py 的对准位采样生成；同时要求存在同名 .json 元数据文件，
+  # 并且必须与servo_A使用相同分辨率、内参、观察高度、末端姿态和工作坐标系。
   suction_ref_path: data/suction_ref.npy
+  # Ubuntu下ADP吸液枪的串口设备；部署前用 ls -l /dev/ttyUSB* 确认实际编号和权限。
+  serial_port: /dev/ttyUSB2
+  # 附件原实现使用的串口波特率。
+  baudrate: 115200
+  # 单次打开、写入和读取响应的超时，单位 s。
+  timeout_s: 5.0
+  # 串口打开或命令通信失败时的最大尝试次数。
+  max_retries: 3
+  # 相邻重试之间的等待时间，单位 s。
+  retry_delay_s: 1.0
+  # 每条命令最多读取的响应字节数，附件原实现为20。
+  response_bytes: 20
+  # true=必须收到非空响应才认为命令成功；原实现未校验空响应，因此默认false以保持协议兼容。
+  require_response: false
+  # 是否在第一次吸液前发送G初始化命令。初始化可能驱动设备，确认设备行为后再改为true。
+  initialize_before_first_absorb: false
+  # 每个目标下发一次n吸液命令的体积，单位微升；附件示例使用800。
+  absorb_volume_ul: 800
+  # 吸液速度，单位微升/秒，范围1~9999；null表示沿用设备当前速度，不发送4号设置命令。
+  absorb_speed_ul_s: null
 
 safety:
   # 每次IBVS对准允许的最大累计XY指令行程，单位 mm；超出后停止。

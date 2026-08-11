@@ -7,6 +7,13 @@ import time
 import numpy as np
 from PyQt6.QtCore import QThread, pyqtSignal
 
+from app.calibration_data import (
+    CalibrationMetadata,
+    file_sha256,
+    load_calibration_array,
+    require_matching_context,
+    validate_metadata_for_config,
+)
 from app.config import AppConfig
 from app.controller import SuctionRobotController
 from app.logging_utils import SessionLogger
@@ -15,7 +22,7 @@ from camera.opencv_camera import OpenCVCamera
 from control.ibvs import IBVSController
 from control.safety import SafetyManager
 from robot.realman_robot import RealRobot
-from suction.real_suction_template import RealSuctionController
+from suction.adp_suction import RealSuctionController
 from vision.detector import HSVObjectDetector
 
 
@@ -26,22 +33,21 @@ TERMINAL_STATES = {
 }
 
 
-def load_runtime_calibration(config: AppConfig) -> tuple[np.ndarray, np.ndarray]:
+def load_runtime_calibration(config: AppConfig) -> tuple[np.ndarray, np.ndarray, CalibrationMetadata]:
     """加载 GUI 自动吸取必需的 IBVS 矩阵和吸盘参考像素。"""
     servo_path = config.path(config.ibvs.servo_A_path)
     reference_path = config.path(config.suction.suction_ref_path)
-    missing = [str(path) for path in (servo_path, reference_path) if not path.exists()]
-    if missing:
-        raise FileNotFoundError(
-            "缺少运行标定文件："
-            + ", ".join(missing)
-            + "。请先完成吸盘参考像素和 XY 视觉伺服标定。"
-        )
-    matrix = np.load(servo_path)
-    reference = np.load(reference_path)
+    matrix, servo_metadata = load_calibration_array(servo_path, "servo_A")
+    reference, reference_metadata = load_calibration_array(reference_path, "suction_ref")
     if matrix.shape != (2, 2) or reference.shape != (2,):
         raise ValueError("标定文件尺寸错误：servo_A 必须为 (2,2)，suction_ref 必须为 (2,)")
-    return matrix.astype(np.float64), reference.astype(np.float64)
+    validate_metadata_for_config(servo_metadata, config)
+    validate_metadata_for_config(reference_metadata, config)
+    require_matching_context(servo_metadata, reference_metadata)
+    current_servo_hash = file_sha256(servo_path)
+    if reference_metadata.servo_A_sha256 != current_servo_hash:
+        raise ValueError("suction_ref 对应的 servo_A 已被替换，请重新执行预对准标定")
+    return matrix.astype(np.float64), reference.astype(np.float64), servo_metadata
 
 
 class ControlWorker(QThread):
@@ -83,16 +89,17 @@ class ControlWorker(QThread):
         try:
             session = SessionLogger(self.config.path("logs"), self.config.system.save_csv)
             self.log_message.emit("正在加载 servo_A 和吸盘参考像素标定文件……")
-            servo_A, suction_ref = load_runtime_calibration(self.config)
+            servo_A, suction_ref, calibration_metadata = load_runtime_calibration(self.config)
 
             detector = HSVObjectDetector(
                 self.config.vision,
                 intrinsic_path=self.config.path(self.config.camera.intrinsic_path),
                 enable_undistort=self.config.camera.enable_undistort,
+                expected_image_size=(self.config.camera.width, self.config.camera.height),
             )
             ibvs = IBVSController(servo_A, self.config.ibvs)
             self._robot = RealRobot(self.config.robot)
-            self._suction = RealSuctionController()
+            self._suction = RealSuctionController(self.config.suction)
             self.log_message.emit(f"标定矩阵条件数：{ibvs.condition_number:.3f}")
             # 先构造控制器并校验预对准参数；配置错误时不建立机械臂连接、更不会运动。
             self._controller = SuctionRobotController(
@@ -105,8 +112,23 @@ class ControlWorker(QThread):
                 suction_ref,
                 session,
             )
-            self.log_message.emit("预对准参数校验通过，正在连接机械臂……")
+            self.log_message.emit("预对准参数校验通过，正在连接ADP吸液枪……")
+            self._suction.connect()
+            self.log_message.emit("ADP吸液枪串口连接成功，正在连接机械臂……")
             self._robot.connect()
+            work_frame_name = self._robot.get_current_work_frame_name()
+            work_frame_pose = np.asarray(self._robot.get_current_work_frame_pose(), dtype=np.float64)
+            if work_frame_name != calibration_metadata.work_frame_name:
+                raise ValueError(
+                    f"机械臂当前工作坐标系 {work_frame_name!r} 与标定时 "
+                    f"{calibration_metadata.work_frame_name!r} 不一致"
+                )
+            calibrated_frame_pose = np.asarray(calibration_metadata.work_frame_pose_m_rad, dtype=np.float64)
+            if not np.allclose(work_frame_pose, calibrated_frame_pose, atol=1e-5, rtol=0.0):
+                raise ValueError(
+                    "机械臂当前工作坐标系定义与标定时同名坐标系的位姿不一致，请恢复坐标系或重新标定"
+                )
+            self.log_message.emit(f"工作坐标系校验通过：{work_frame_name}")
 
             previous_state: SystemState | None = None
             period_s = 1.0 / max(self.config.system.loop_hz, 1.0)
@@ -118,13 +140,16 @@ class ControlWorker(QThread):
                 self._controller.step()
                 if self._controller.state is not previous_state:
                     previous_state = self._controller.state
-                    self.state_changed.emit(previous_state.name, f"状态切换：{previous_state.name}")
+                    reason = self._controller.last_transition_reason or f"状态切换：{previous_state.name}"
+                    self.state_changed.emit(previous_state.name, reason)
                 remaining = period_s - (time.monotonic() - cycle_started)
                 if remaining > 0:
                     time.sleep(remaining)
 
             final_state = self._controller.state
             pick_count = self._controller.pick_count
+            if final_state is SystemState.ERROR:
+                failure = self._controller.last_transition_reason or "控制器进入 ERROR 状态"
         except Exception as exc:
             failure = str(exc)
             if session is not None:

@@ -1,0 +1,180 @@
+一、跳过相机标定
+保持 [config.yaml](C:/Users/PC/Desktop/shijue/robot_suction_ibvs/config.yaml)：
+camera:
+  enable_undistort: false
+不需要运行：
+python calibration/calibrate_camera.py
+后续标定和正式运行期间都必须保持 enable_undistort: false，否则程序会认为标定条件发生变化并拒绝旧标定。
+同时保证：
+相机始终使用同一个设备节点。
+实际分辨率始终是 3840×2160。
+相机不能重新安装或移动。
+相机曝光、焦距、末端姿态尽量保持不变。
+二、先设置真实观察位
+现在配置里的观察位还是占位值：
+observe_pose: [0.0, 0.0, 150.0, 0.0, 0.0, 0.0]
+observe_pose_confirmed: false
+先通过示教器把机械臂移动到正式观察位置：
+相机位于容器正上方。
+相机光轴尽量垂直向下。
+能看到整个作业区域。
+周围至少允许机械臂执行 ±2 mm 的 XY 微动。
+Z 和末端姿态以后不再改变。
+读取当前末端位姿，填入：
+robot:
+  observe_pose: [真实X, 真实Y, 真实Z, 真实RX, 真实RY, 真实RZ]
+  observe_pose_confirmed: true
+
+  observe_z_mm: 真实Z
+注意：
+observe_z_mm 应与 observe_pose 的 Z 相同。
+标定和运行期间不要切换机械臂工作坐标系。
+当前 z_motion_confirmed 可以暂时保持 false，XY 标定不需要下降。
+三、标定 servo_A
+1. 准备目标
+在镜头下面放一个黑色目标，要求：
+画面中只能有一个尺寸合格目标。
+目标保持静止。
+目标不要放在图像边缘。
+机械臂移动 ±2 mm 后目标仍然完整可见。
+吸管如果遮挡目标，可以暂时拆下，但不能改变相机位置和末端姿态。
+先通过 GUI 或检测工具确认只有一个绿色目标：
+python tools/inspect_detection.py --config config.yaml
+2. 执行标定
+关闭 GUI，确保相机没有被其他程序占用，然后运行：
+python calibration/calibrate_servo_xy.py \
+  --config config.yaml \
+  --frames 10
+脚本会自动：
+连接相机。
+连接睿尔曼机械臂。
+移动到观察位。
+读取当前工作坐标系。
+分别执行这些 XY 微移：
+X: -2、-1、+1、+2 mm
+Y: -2、-1、+1、+2 mm
+每次微移后读取目标像素变化。
+每次回到原位置后检查回位误差。
+拟合：
+像素变化 = servo_A × 机械臂XY位移
+执行期间机械臂会自动运动，启动命令前要清空周围空间并准备好实体急停。
+3. 成功结果
+成功后会生成：
+data/servo_A.npy
+data/servo_A.npy.json
+终端应显示类似：
+rank=2
+condition=...
+fit_rms=...px
+Saved data/servo_A.npy and its calibration-context sidecar
+默认要求：
+目标抖动不超过 3 px。
+回位误差不超过 3 px。
+拟合 RMS 不超过 2 px。
+矩阵秩必须为 2。
+条件数不能过大。
+不合格时脚本不会保存错误矩阵。
+四、标定吸管对准点和预对准偏移
+这一步使用 [calibrate_prealign.py](C:/Users/PC/Desktop/shijue/robot_suction_ibvs/calibration/calibrate_prealign.py)，脚本本身不会移动机械臂，需要手动通过示教器移动 XY。
+1. 对准位采样
+准备条件：
+继续使用同一个目标。
+目标不能移动。
+相机分辨率、观察 Z、末端姿态完全不变。
+只能移动机械臂 XY。
+先让吸管轴线准确位于目标正上方。
+如果吸管此时会遮住目标，可以：
+先用吸管完成机械对准。
+记录并保持机械臂位姿。
+小心拆下吸管。
+不能移动相机、机械臂和目标。
+运行：
+python calibration/calibrate_prealign.py \
+  --config config.yaml \
+  --frames 20
+窗口进入第一阶段：
+ALIGN: press A
+等待显示：
+valid targets=1
+samples=20/20
+jitter <= 3px
+然后按 A。
+这一点会成为：
+suction_ref_px
+也就是吸管轴线对准目标时的目标像素坐标。
+2. 预对准位采样
+保持：
+目标不动。
+Z 不变。
+末端姿态不变。
+只移动机械臂 XY。
+手动移动机械臂到预对准位置。这个位置应该满足：
+安装吸管后目标仍然完全可见。
+距最终对准位置不要太远。
+吸管不会挡住目标中心。
+后续可以通过一次短 XY 运动到达目标正上方。
+窗口会显示：
+PREALIGN: press P
+等待重新采满 20 帧且目标稳定，然后按 P。
+脚本会计算：
+prealign_offset_px
+    = 预对准时目标中心 - 对准时目标中心
+
+final_xy
+    = inv(servo_A) × (-prealign_offset_px)
+成功后生成：
+data/suction_ref.npy
+data/suction_ref.npy.json
+同时终端会输出需要填写的配置，例如：
+prealign_offset_px: [120.5, -65.2]
+prealign_offset_confirmed: true
+五、确认预对准位置真的无遮挡
+如果前面拆下了吸管，先不要直接确认。
+需要：
+重新装好吸管。
+确保相机位置没有发生变化。
+将机械臂移动到刚才的预对准位。
+确认目标中心依然可以完整检测。
+确认吸管没有进入目标轮廓或中心区域。
+确认后，把终端输出填入配置：
+ibvs:
+  prealign_offset_px: [实际du, 实际dv]
+  prealign_offset_confirmed: true
+也可以在已经验证无遮挡的前提下，重新运行并自动写入：
+python calibration/calibrate_prealign.py \
+  --config config.yaml \
+  --frames 20 \
+  --apply-config \
+  --confirm-target-visible
+六、标定完成后应有的文件
+最终需要：
+data/servo_A.npy
+data/servo_A.npy.json
+data/suction_ref.npy
+data/suction_ref.npy.json
+其中 JSON 会记录：
+相机分辨率。
+是否使用畸变校正。
+观察位姿。
+机械臂工作坐标系。
+标定文件之间的对应关系。
+修改相机分辨率、观察位姿、工作坐标系或重新安装相机后，都需要重新标定。
+七、首次实机验证
+建议先保持：
+robot:
+  z_motion_confirmed: false
+然后启动 GUI，验证：
+机械臂到达观察位。
+选择正确目标。
+IBVS 移动方向正确。
+目标稳定到达无遮挡预对准点。
+终末 XY 移动后吸管到达目标正上方。
+程序在准备下降时因为 Z 未确认而停止。
+这次测试不会下降，也不会发送 ADP 吸液命令。
+确认 XY 完全正确后，再填写真实：
+pick_z_mm:
+safe_z_mm:
+z_down_speed_mm_s:
+z_up_speed_mm_s:
+z_motion_confirmed: true
+首次下降应先把 pick_z_mm 设置在目标上方的安全高度，逐步降低，不能第一次就直接设置到容器底部。

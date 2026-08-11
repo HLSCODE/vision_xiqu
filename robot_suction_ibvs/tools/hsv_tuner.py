@@ -15,6 +15,7 @@ import numpy as np
 
 from app.config import load_config
 from camera.opencv_camera import OpenCVCamera
+from vision.detector import HSVObjectDetector
 
 
 def nothing(_: int) -> None:
@@ -22,7 +23,7 @@ def nothing(_: int) -> None:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Tune HSV orange/yellow segmentation using OpenCV trackbars")
+    parser = argparse.ArgumentParser(description="Tune HSV segmentation using OpenCV trackbars")
     parser.add_argument("--config", default="config.yaml")
     parser.add_argument("--source", default=None, help="Optional device id, video path, or RTSP URL")
     parser.add_argument("--output", default="data/hsv_tuned.json", help="JSON file written after S is pressed")
@@ -34,6 +35,12 @@ def main() -> int:
     else:
         camera_cfg = config.camera
     camera = OpenCVCamera(camera_cfg)
+    preprocessor = HSVObjectDetector(
+        config.vision,
+        config.path(config.camera.intrinsic_path),
+        config.camera.enable_undistort,
+        expected_image_size=(camera_cfg.width, camera_cfg.height),
+    )
     window = "HSV controls"
     cv2.namedWindow(window)
     defaults = (*config.vision.hsv_lower, *config.vision.hsv_upper)
@@ -48,6 +55,7 @@ def main() -> int:
             frame = camera.get_frame()
             if frame is None:
                 raise RuntimeError("Camera/video frame read failed")
+            frame = preprocessor.preprocess(frame)
             values = [cv2.getTrackbarPos(label, window) for label in labels]
             lower, upper = np.array(values[:3], dtype=np.uint8), np.array(values[3:], dtype=np.uint8)
             hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)

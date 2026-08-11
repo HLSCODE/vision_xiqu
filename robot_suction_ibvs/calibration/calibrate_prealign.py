@@ -26,6 +26,13 @@ if __package__ in (None, ""):
 import cv2
 import numpy as np
 
+from app.calibration_data import (
+    file_sha256,
+    load_calibration_array,
+    make_metadata,
+    save_calibration_array,
+    validate_metadata_for_config,
+)
 from app.config import load_config
 from camera.opencv_camera import OpenCVCamera
 from vision.detector import HSVObjectDetector
@@ -130,12 +137,14 @@ def main() -> int:
     reference_path = config.path(config.suction.suction_ref_path)
     if not matrix_path.exists():
         raise FileNotFoundError(f"Missing required calibration file: {matrix_path}")
-    matrix = np.asarray(np.load(matrix_path), dtype=np.float64)
+    matrix, servo_metadata = load_calibration_array(matrix_path, "servo_A")
+    validate_metadata_for_config(servo_metadata, config)
 
     detector = HSVObjectDetector(
         config.vision,
         config.path(config.camera.intrinsic_path),
         config.camera.enable_undistort,
+        expected_image_size=(config.camera.width, config.camera.height),
     )
     camera = OpenCVCamera(config.camera)
     samples: deque[np.ndarray] = deque(maxlen=args.frames)
@@ -239,10 +248,6 @@ def main() -> int:
                     f"{config.safety.max_xy_travel_mm:.3f} mm"
                 )
 
-            # 两个位置均采样并通过抖动、矩阵和运动距离检查后，才覆盖吸管参考文件。
-            reference_path.parent.mkdir(parents=True, exist_ok=True)
-            np.save(reference_path, measured_aligned)
-            print(f"Saved suction_ref [u,v] px to {reference_path}")
             print("Copy to config.yaml:")
             print(
                 "  prealign_offset_px: "
@@ -252,6 +257,16 @@ def main() -> int:
             if args.apply_config:
                 apply_to_config(config_path, offset_px)
                 print(f"Updated {config_path}")
+            # 两个位置均采样并通过抖动、矩阵和运动距离检查后，才覆盖吸管参考文件。
+            reference_metadata = make_metadata(
+                config,
+                "suction_ref",
+                servo_metadata.work_frame_name,
+                servo_metadata.work_frame_pose_m_rad,
+                servo_A_sha256=file_sha256(matrix_path),
+            )
+            save_calibration_array(reference_path, measured_aligned, reference_metadata)
+            print(f"Saved suction_ref [u,v] px to {reference_path} and its context sidecar")
             return 0
     finally:
         camera.close()

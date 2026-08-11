@@ -28,6 +28,7 @@
 | 文件 | 功能 |
 | --- | --- |
 | `app/config.py` | 读取并校验 YAML 配置，提供带类型的配置对象。 |
+| `app/calibration_data.py` | 保存/读取标定数组及 JSON 上下文，校验分辨率、内参、观察位和工作坐标系一致性。 |
 | `app/state.py` | 定义 INIT、检测、预对准 IBVS、终末 XY、下降、吸取、恢复等状态。 |
 | `app/controller.py` | 显式状态机；实现检测、锁定、可见区预对准、受限终末 XY、吸取和回观察位循环。 |
 | `app/logging_utils.py` | 创建会话日志和可选 CSV 控制记录。 |
@@ -45,16 +46,16 @@
 | `camera/opencv_camera.py` | USB、视频文件或 RTSP 的 OpenCV 相机实现。 |
 | `robot/base.py` | 机械臂统一接口。 |
 | `robot/realman_robot.py` | 睿尔曼 API2 连接、位姿换算、规划运动、XY 速度透传和停止控制。 |
-| `suction/base.py` | 吸盘统一接口。 |
-| `suction/real_suction_template.py` | GPIO、串口或 PLC 真空控制接入位置。 |
+| `suction/base.py` | 吸取执行器统一接口。 |
+| `suction/adp_suction.py` | ADP 串口连接、CRC 帧、初始化、吸液速度和定量吸液命令实现。 |
 
 ## 标定与现场工具
 
 | 文件 | 功能 |
 | --- | --- |
 | `calibration/calibrate_camera.py` | 用棋盘格图像标定可选相机内参和畸变。 |
-| `calibration/calibrate_servo_xy.py` | 通过已知 XY 微位移拟合并保存 `servo_A.npy`。 |
-| `calibration/calibrate_prealign.py` | 分别采集吸管对准位和无遮挡预对准位的目标像素中心，保存 `suction_ref.npy`，计算像素偏移与终末 XY，并可在明确确认后写入配置。 |
+| `calibration/calibrate_servo_xy.py` | 通过已知 XY 微位移拟合并验证 `servo_A.npy`，同时保存标定上下文 JSON。 |
+| `calibration/calibrate_prealign.py` | 分别采集吸管对准位和无遮挡预对准位的目标像素中心，保存 `suction_ref.npy` 及上下文，计算像素偏移与终末 XY，并可在明确确认后写入配置。 |
 | `tools/hsv_tuner.py` | 用滑块现场调 HSV 阈值并保存 JSON。 |
 | `tools/inspect_camera.py` | 检查相机设备、分辨率、帧率与断流。 |
 | `tools/inspect_detection.py` | 检查 HSV 轮廓、`size_px` 与尺寸筛选结果。 |

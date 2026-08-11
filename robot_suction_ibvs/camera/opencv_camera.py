@@ -43,16 +43,14 @@ class OpenCVCamera:
             self._capture.release()
             self._capture = cv2.VideoCapture(source)
         if not self._capture.isOpened():
+            self._capture.release()
+            self._capture = None
             raise RuntimeError(f"Unable to open camera source: {source!r}")
         self._capture.set(cv2.CAP_PROP_FRAME_WIDTH, self.config.width)
         self._capture.set(cv2.CAP_PROP_FRAME_HEIGHT, self.config.height)
         self._capture.set(cv2.CAP_PROP_FPS, self.config.fps)
         self._capture.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc("M", "J", "P", "G"))
 
-        self._actual_resolution = (
-            int(self._capture.get(cv2.CAP_PROP_FRAME_WIDTH)),
-            int(self._capture.get(cv2.CAP_PROP_FRAME_HEIGHT)),
-        )
         with self._frame_condition:
             self._latest_frame = None
             self._frame_sequence = 0
@@ -67,9 +65,21 @@ class OpenCVCamera:
         # 首次打开时等待一帧，尽早向界面报告设备、权限或数据流错误。
         deadline = time.monotonic() + 3.0
         while time.monotonic() < deadline:
+            actual_resolution: tuple[int, int] | None = None
             with self._frame_lock:
                 if self._latest_frame is not None:
-                    return
+                    height, width = self._latest_frame.shape[:2]
+                    actual_resolution = (int(width), int(height))
+            if actual_resolution is not None:
+                self._actual_resolution = actual_resolution
+                requested = (int(self.config.width), int(self.config.height))
+                if actual_resolution != requested:
+                    self.close()
+                    raise RuntimeError(
+                        f"相机实际分辨率 {actual_resolution[0]}x{actual_resolution[1]} 与配置 "
+                        f"{requested[0]}x{requested[1]} 不一致。像素标定不能缩放复用，请修改配置或相机格式后重新标定"
+                    )
+                return
             time.sleep(0.01)
         self.close()
         raise RuntimeError(f"Camera opened but no frame arrived from source: {source!r}")
