@@ -47,14 +47,26 @@ class IBVSConfig:
     slowdown_error_px: float
     max_acceleration_mm_s2: float
     servo_A_path: str
+    prealign_offset_px: tuple[float, float]
+    prealign_offset_confirmed: bool
+    final_approach_max_mm: float
 
 
 @dataclass(frozen=True)
 class RobotConfig:
+    ip: str
+    port: int
+    api_timeout_ms: int
     observe_pose: tuple[float, ...]
+    observe_pose_confirmed: bool
+    observe_speed_percent: int
+    linear_speed_percent: int
+    velocity_period_ms: int
+    motion_timeout_s: float
     observe_z_mm: float
     pick_z_mm: float
     safe_z_mm: float
+    z_motion_confirmed: bool
     z_mode: str
     z_down_speed_mm_s: float
     z_up_speed_mm_s: float
@@ -74,8 +86,6 @@ class SafetyConfig:
 
 @dataclass(frozen=True)
 class SystemConfig:
-    show_debug: bool
-    show_mask: bool
     save_csv: bool
     loop_hz: float
 
@@ -128,7 +138,7 @@ def load_config(path: str | Path) -> AppConfig:
             **{**vision, "hsv_lower": tuple(vision["hsv_lower"]), "hsv_upper": tuple(vision["hsv_upper"])}
         ),
         tracking=TrackingConfig(**tracking),
-        ibvs=IBVSConfig(**ibvs),
+        ibvs=IBVSConfig(**{**ibvs, "prealign_offset_px": tuple(ibvs["prealign_offset_px"])}),
         robot=RobotConfig(**{**robot, "observe_pose": tuple(robot["observe_pose"])}),
         suction=SuctionConfig(**suction),
         safety=SafetyConfig(**safety),

@@ -15,7 +15,7 @@ import numpy as np
 from app.config import load_config
 from camera.opencv_camera import OpenCVCamera
 from control.safety import SafetyManager
-from robot.real_robot_template import RealRobot
+from robot.realman_robot import RealRobot
 from vision.detector import HSVObjectDetector
 
 
@@ -49,7 +49,7 @@ def main() -> int:
     logger.addHandler(logging.StreamHandler())
     logger.setLevel(logging.INFO)
     camera = OpenCVCamera(config.camera)
-    robot = RealRobot()  # TODO adapter must be implemented before real calibration.
+    robot = RealRobot(config.robot)
     detector = HSVObjectDetector(config.vision, config.path(config.camera.intrinsic_path), config.camera.enable_undistort)
     safety = SafetyManager(robot, config.safety)
     output = config.path(args.output or config.ibvs.servo_A_path)
@@ -80,9 +80,13 @@ def main() -> int:
         print(f"Saved {output}")
         return 0
     finally:
-        safety.stop_all()
-        robot.disconnect()
-        camera.close()
+        try:
+            safety.stop_all()
+        finally:
+            try:
+                robot.disconnect()
+            finally:
+                camera.close()
 
 
 if __name__ == "__main__":

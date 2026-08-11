@@ -1,58 +1,118 @@
-# All distance and velocity values use mm / mm/s. Image positions use px.
+# 本项目统一单位：机械臂位置使用 mm，速度使用 mm/s，加速度使用 mm/s²；
+# 姿态使用 rad；图像坐标和尺寸使用相机原始采集图像的 px。
+
 camera:
+  # 请求相机输出的原始图像宽度，单位 px。相机不支持时，OpenCV 可能退回其他宽度。
   width: 3840
+  # 请求相机输出的原始图像高度，单位 px。所有像素标定必须对应实际采集分辨率。
   height: 2160
+  # 请求采集帧率，单位 FPS；实际帧率受相机、USB 带宽和曝光时间影响。
   fps: 30
-  device_id:  "/dev/video6"
+  # OpenCV 视频源。Ubuntu 可填写 /dev/video6，也可填写整数索引（如 0）。
+  device_id: "/dev/video6"
+  # 视频文件或 RTSP 地址；为 null 时使用 device_id，非 null 时优先使用这里的地址。
   video_path: null
+  # 是否在控制器的原始图像检测前使用相机内参进行畸变校正。
   enable_undistort: false
+  # 相机内参文件路径，应包含 camera_matrix 和 dist_coeffs；相对路径以项目根目录为准。
   intrinsic_path: data/camera_intrinsic.npz
 
 vision:
-  # OpenCV HSV 黑色范围：不限制色相和饱和度，只筛选低亮度像素。
-  # 如果阴影也被识别，可把 V 上限从 80 调低到 50~70。
+  # OpenCV HSV 下限 [H,S,V]。OpenCV 的 H 范围是 0~179，S/V 范围是 0~255。
+  # 当前下限与 hsv_upper 组合后表示黑色：不限制色相、饱和度，只限制低亮度。
   hsv_lower: [0, 0, 0]
+  # HSV 上限 [H,S,V]。V=80 越大越容易检出浅黑目标，也越容易把阴影识别为目标；
+  # 阴影误检时可将 V 调低到 50~70，黑色目标漏检时可适当调高。
   hsv_upper: [179, 255, 80]
-  min_area_px: 100.0
+  # 轮廓最小面积，单位为原始图像 px²；小于该面积的轮廓视为噪声并丢弃。
+  min_area_px: 500.0
+  # HSV 掩膜开运算/闭运算的椭圆核尺寸，单位 px；建议使用正奇数，越大去噪越强，
+  # 但也可能抹掉小目标或把相邻目标连接起来。
   morphology_kernel: 3
-  size_threshold_px: 200.0
+  # 可吸目标最大像素尺寸，单位为原始图像 px。尺寸定义为最小外接旋转矩形的
+  # max(width, height)，只有 size_px < 该值的目标才允许在全局检测阶段被选择。
+  size_threshold_px: 2000.0
 
 tracking:
+  # IBVS期间相邻帧目标中心允许的最大匹配距离，单位为原始图像 px。
+  # 过小会因运动/检测抖动丢失目标；过大可能错误关联到附近的另一个目标。
   max_distance_px: 80.0
+  # 锁定目标允许连续丢失的最大帧数；每次丢失都会先停止XY，达到此值后进入恢复状态。
   max_lost_frames: 5
 
 ibvs:
+  # IBVS比例增益，控制公式为 v=-gain*inv(A)*像素误差，量纲可理解为 1/s。
+  # 越大对准越快但更容易超调/振荡；越小更平稳但对准时间更长。
   gain: 0.5
+  # XY合速度上限，单位 mm/s；限制 sqrt(vx²+vy²)，首次真机建议保持低速。
   max_velocity_mm_s: 5.0
+  # 非零XY合速度下限，单位 mm/s；设置为0表示不强制最低速度，通常更利于小误差稳定。
   min_velocity_mm_s: 0.0
+  # 对准像素容差，单位为原始图像 px。误差进入容差后速度置零，并开始累计稳定帧。
   pixel_tolerance: 5.0
+  # 必须连续多少帧满足预对准像素容差，才允许执行终末 XY 移动；越大越不易被单帧噪声误触发。
   stable_frames: 5
+  # 单个目标XY对准的最长时间，单位 s；超时后停止XY并进入恢复流程。
   max_align_time_s: 15.0
+  # 像素误差连续增长达到多少帧后判定方向/标定可能异常，并停止当前对准。
   error_growth_frames: 10
+  # 减速区半径，单位为原始图像 px；误差小于该值时速度按比例减小，0表示关闭减速区。
   slowdown_error_px: 10.0
   max_acceleration_mm_s2: 20.0
   servo_A_path: data/servo_A.npy
 
 robot:
-  # Replace these six values to match the pose format expected by the real robot SDK.
+  # 睿尔曼机械臂控制器IP，运行电脑必须与它处于可通信的同一网段。
+  ip: 192.168.3.19
+  # 睿尔曼API2控制端口，通常为8080。
+  port: 8080
+  # SDK普通请求的接收超时时间，单位 ms；这是通信超时，不是机械臂运动超时。
+  api_timeout_ms: 1000
+  # 固定高位观察位：[x_mm,y_mm,z_mm,rx_rad,ry_rad,rz_rad]。
+  # 当前值是占位值，必须用示教器移动到安全观察位后读取并替换。
   observe_pose: [0.0, 0.0, 150.0, 0.0, 0.0, 0.0]
+  # 观察位安全确认开关。false时适配器拒绝移动到观察位；实际示教核对后才能改为true。
+  observe_pose_confirmed: false
+  # 移动到观察位或通用位姿时的规划速度百分比，范围1~100，不是mm/s。
+  observe_speed_percent: 10
+  # XY标定以及预对准后的终末相对移动使用的直线规划速度百分比，范围1~100。
+  linear_speed_percent: 5
+  # rm_movev_canfd笛卡尔速度透传周期，单位 ms，应约等于1000/system.loop_hz。
+  # 当前控制循环30Hz，对应约33ms，并使用低跟随模式。
+  velocity_period_ms: 33
+  # 非阻塞MOVEJ_P/MOVEL规划运动的最长等待时间，单位 s；超时后执行停止。
+  motion_timeout_s: 30.0
+  # 固定观察高度，单位 mm。相对Z模式用它计算下降量，应与observe_pose中的z一致。
   observe_z_mm: 150.0
+  # 吸取高度，单位 mm。absolute模式表示绝对Z；relative模式下与observe_z_mm做差得到下降量。
   pick_z_mm: 35.0
+  # 吸取后的安全抬升高度，单位 mm。absolute模式表示绝对Z；relative模式用于计算抬升量。
   safe_z_mm: 150.0
+  # Z参数安全确认开关。false时适配器拒绝所有Z运动；实测三个高度并核对后才能改为true。
+  z_motion_confirmed: false
+  # Z运动模式：absolute=使用工作坐标系绝对Z；relative=按观察/吸取/安全高度之差相对移动。
   z_mode: absolute
+  # 垂直下降请求速度，单位 mm/s；适配器会按机械臂最大线速度换算成SDK速度百分比。
   z_down_speed_mm_s: 2.0
+  # 垂直抬升请求速度，单位 mm/s；适配器会换算成SDK速度百分比。
   z_up_speed_mm_s: 5.0
 
 suction:
+  # 开启吸盘后等待负压建立的保持时间，单位 s；达到该时间后才开始抬升。
   hold_time_s: 0.5
+  # 吸盘轴线与目标对准时，目标在原始图像中的参考像素 [u_ref,v_ref] 文件。
+  # 由 calibration/calibrate_prealign.py 的对准位采样生成；必须与servo_A使用相同分辨率、观察高度和末端姿态。
   suction_ref_path: data/suction_ref.npy
 
 safety:
+  # 每次IBVS对准允许的最大累计XY指令行程，单位 mm；超出后停止。
+  # 这是对下发速度积分得到的安全限制，不等同于机械臂反馈的真实位移。
   max_xy_travel_mm: 30.0
+  # 允许连续读取相机失败的帧数；达到该值后停止机械臂并触发安全异常。
   camera_failure_limit: 3
 
 system:
-  show_debug: true
-  show_mask: false
+  # 是否在logs目录保存每个IBVS周期的CSV数据；文本运行日志始终保存。
   save_csv: true
+  # GUI后台状态机目标循环频率，单位 Hz；实际频率还受相机和SDK响应时间影响。
   loop_hz: 30.0

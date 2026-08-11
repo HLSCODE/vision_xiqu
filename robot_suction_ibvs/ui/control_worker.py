@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import time
-from dataclasses import replace
 
+import numpy as np
 from PyQt6.QtCore import QThread, pyqtSignal
 
 from app.config import AppConfig
@@ -14,8 +14,7 @@ from app.state import SystemState
 from camera.opencv_camera import OpenCVCamera
 from control.ibvs import IBVSController
 from control.safety import SafetyManager
-from main import load_runtime_calibration
-from robot.real_robot_template import RealRobot
+from robot.realman_robot import RealRobot
 from suction.real_suction_template import RealSuctionController
 from vision.detector import HSVObjectDetector
 
@@ -25,6 +24,24 @@ TERMINAL_STATES = {
     SystemState.ERROR,
     SystemState.EMERGENCY_STOP,
 }
+
+
+def load_runtime_calibration(config: AppConfig) -> tuple[np.ndarray, np.ndarray]:
+    """加载 GUI 自动吸取必需的 IBVS 矩阵和吸盘参考像素。"""
+    servo_path = config.path(config.ibvs.servo_A_path)
+    reference_path = config.path(config.suction.suction_ref_path)
+    missing = [str(path) for path in (servo_path, reference_path) if not path.exists()]
+    if missing:
+        raise FileNotFoundError(
+            "缺少运行标定文件："
+            + ", ".join(missing)
+            + "。请先完成吸盘参考像素和 XY 视觉伺服标定。"
+        )
+    matrix = np.load(servo_path)
+    reference = np.load(reference_path)
+    if matrix.shape != (2, 2) or reference.shape != (2,):
+        raise ValueError("标定文件尺寸错误：servo_A 必须为 (2,2)，suction_ref 必须为 (2,)")
+    return matrix.astype(np.float64), reference.astype(np.float64)
 
 
 class ControlWorker(QThread):
@@ -37,11 +54,7 @@ class ControlWorker(QThread):
 
     def __init__(self, config: AppConfig, camera: OpenCVCamera, parent=None) -> None:
         super().__init__(parent)
-        # GUI 使用 Qt QLabel 显示图像，因此关闭控制器内部的 cv2.imshow。
-        self.config = replace(
-            config,
-            system=replace(config.system, show_debug=False, show_mask=False),
-        )
+        self.config = config
         self.camera = camera
         self._controller: SuctionRobotController | None = None
         self._robot: RealRobot | None = None
@@ -78,12 +91,10 @@ class ControlWorker(QThread):
                 enable_undistort=self.config.camera.enable_undistort,
             )
             ibvs = IBVSController(servo_A, self.config.ibvs)
-            self._robot = RealRobot()
+            self._robot = RealRobot(self.config.robot)
             self._suction = RealSuctionController()
             self.log_message.emit(f"标定矩阵条件数：{ibvs.condition_number:.3f}")
-            self.log_message.emit("正在连接机械臂……")
-            self._robot.connect()
-
+            # 先构造控制器并校验预对准参数；配置错误时不建立机械臂连接、更不会运动。
             self._controller = SuctionRobotController(
                 self.config,
                 self.camera,
@@ -94,6 +105,8 @@ class ControlWorker(QThread):
                 suction_ref,
                 session,
             )
+            self.log_message.emit("预对准参数校验通过，正在连接机械臂……")
+            self._robot.connect()
 
             previous_state: SystemState | None = None
             period_s = 1.0 / max(self.config.system.loop_hz, 1.0)

@@ -44,14 +44,39 @@ class SafetyManager:
         self.robot.move_to_observe_pose()
         self.robot.wait_until_stop()
 
-    def move_xy_relative(self, dx_mm: float, dy_mm: float) -> None:
-        """Execute a bounded calibration/Jog increment through the same safety gateway."""
+    def move_xy_relative(
+        self,
+        dx_mm: float,
+        dy_mm: float,
+        max_increment_mm: float | None = None,
+    ) -> None:
+        """执行一次受限的相对 XY 规划运动。
+
+        ``max_increment_mm`` 可为终末盲移设置比全局 XY 行程更严格的单次上限。
+        如果当前处于一次 IBVS 对准中，该位移还会计入本轮累计指令行程，避免
+        “视觉移动 + 终末移动”的合计距离绕过 ``max_xy_travel_mm``。
+        """
         increment = np.array([dx_mm, dy_mm], dtype=np.float64)
-        if float(np.linalg.norm(increment)) > self.config.max_xy_travel_mm:
-            raise SafetyViolation("Requested relative XY increment exceeds configured travel limit")
+        if not np.all(np.isfinite(increment)):
+            raise SafetyViolation("Requested relative XY increment contains NaN or infinity")
+        increment_norm = float(np.linalg.norm(increment))
+        limit = self.config.max_xy_travel_mm
+        if max_increment_mm is not None:
+            if not np.isfinite(max_increment_mm) or max_increment_mm <= 0:
+                raise SafetyViolation("Relative XY increment limit must be positive and finite")
+            limit = min(limit, float(max_increment_mm))
+        if increment_norm > limit:
+            raise SafetyViolation(
+                f"Requested relative XY increment {increment_norm:.3f} mm exceeds {limit:.3f} mm limit"
+            )
+        combined_travel = self._travel_mm + increment
+        if self._align_started_at is not None and float(np.linalg.norm(combined_travel)) > self.config.max_xy_travel_mm:
+            raise SafetyViolation("Visual alignment plus final XY approach exceeds configured travel limit")
         self.stop_xy()
         self.robot.move_xy_relative(dx_mm, dy_mm)
         self.robot.wait_until_stop()
+        if self._align_started_at is not None:
+            self._travel_mm = combined_travel
 
     def set_xy_velocity(self, velocity_mm_s: np.ndarray) -> None:
         """Clamp the command and track the integrated, commanded XY travel."""

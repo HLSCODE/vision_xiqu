@@ -1,4 +1,4 @@
-"""HSV segmentation and contour measurements for orange-yellow objects."""
+"""HSV segmentation and contour measurements for configured target colours."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from vision.models import DetectedObject, DetectionResult
 
 
 class HSVObjectDetector:
-    """Detect static orange/yellow objects using configurable HSV thresholds."""
+    """Detect static objects using the HSV range configured in ``config.yaml``."""
 
     def __init__(self, config: VisionConfig, intrinsic_path: Path | None = None, enable_undistort: bool = False) -> None:
         self.config = config

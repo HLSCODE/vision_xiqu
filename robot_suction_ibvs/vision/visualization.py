@@ -1,11 +1,10 @@
-"""OpenCV debug overlays for observation and IBVS control."""
+"""PyQt 相机预览使用的 OpenCV 目标标记。"""
 
 from __future__ import annotations
 
 import cv2
 import numpy as np
 
-from app.state import SystemState
 from vision.models import DetectedObject
 
 
@@ -60,47 +59,4 @@ def draw_detection_overlay(
             thickness,
             cv2.LINE_AA,
         )
-    return canvas
-
-
-def draw_debug_overlay(
-    frame_bgr: np.ndarray,
-    objects: list[DetectedObject],
-    valid_objects: list[DetectedObject],
-    suction_ref_px: np.ndarray,
-    state: SystemState,
-    target: DetectedObject | None = None,
-    error_px: np.ndarray | None = None,
-    velocity_mm_s: np.ndarray | None = None,
-    fps: float | None = None,
-) -> np.ndarray:
-    """Return an annotated BGR frame without mutating the capture buffer."""
-    canvas = frame_bgr.copy()
-    valid_ids = {id(obj) for obj in valid_objects}
-    for obj in objects:
-        color = (0, 200, 0) if id(obj) in valid_ids else (0, 80, 255)
-        cv2.drawContours(canvas, [obj.contour], -1, color, 2)
-        point = tuple(np.round(obj.center).astype(int))
-        label = f"#{obj.index} size={obj.size_px:.1f}px"
-        if id(obj) in valid_ids:
-            label += " VALID"
-        cv2.putText(canvas, label, (point[0] + 6, point[1] - 6), cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1)
-        cv2.circle(canvas, point, 3, color, -1)
-    ref = tuple(np.round(suction_ref_px).astype(int))
-    cv2.drawMarker(canvas, ref, (255, 255, 0), cv2.MARKER_CROSS, 22, 2)
-    cv2.putText(canvas, "SUCTION REF", (ref[0] + 8, ref[1] + 18), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 0), 1)
-    if target is not None:
-        point = tuple(np.round(target.center).astype(int))
-        cv2.circle(canvas, point, 18, (255, 0, 255), 2)
-        cv2.putText(canvas, "TARGET", (point[0] + 18, point[1] + 18), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 0, 255), 2)
-    lines = [f"STATE: {state.name}"]
-    if error_px is not None:
-        lines.append(f"error: ({error_px[0]:.1f}, {error_px[1]:.1f}) px")
-    if velocity_mm_s is not None:
-        lines.append(f"vxy: ({velocity_mm_s[0]:.2f}, {velocity_mm_s[1]:.2f}) mm/s")
-    if fps is not None:
-        lines.append(f"FPS: {fps:.1f}")
-    for row, text in enumerate(lines):
-        cv2.putText(canvas, text, (12, 28 + row * 22), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-        cv2.putText(canvas, text, (12, 28 + row * 22), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (30, 30, 30), 1)
     return canvas
