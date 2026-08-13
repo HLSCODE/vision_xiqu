@@ -83,7 +83,9 @@ final_dXY_mm = inv(A_px_per_mm) * (suction_ref - current_pixel)
 
    `calibrate_servo_xy.py` 运行期间画面中必须始终只有一个尺寸合格且静止的目标；
    工具会检查采样抖动、机械臂微移后回位误差、拟合秩、条件数与拟合 RMS，不合格时不会保存矩阵。
-   每次到位后默认等待 1 秒，并在最长 10 秒内寻找连续稳定的 10 帧窗口。曝光稳定较慢时可增加：
+   每次运动指令完成后，脚本先等待机械臂报告停止；随后默认用 1 秒持续读取并丢弃振动、
+   相机缓存和自动曝光过渡帧，最后才在最长 10 秒内寻找连续稳定的 10 帧窗口并计算中心。
+   曝光或结构稳定较慢时可增加：
 
    ```bash
    python calibration/calibrate_servo_xy.py --config config.yaml --frames 10 \

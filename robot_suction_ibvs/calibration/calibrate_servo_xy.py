@@ -80,11 +80,27 @@ def average_target_center(
     )
 
 
-def wait_for_settle(seconds: float, label: str) -> None:
-    """Allow robot vibration, queued frames, and camera auto-exposure to settle."""
-    if seconds > 0:
-        print(f"{label}: waiting {seconds:.2f}s for motion/image settling...")
-        time.sleep(seconds)
+def wait_for_settle(camera: OpenCVCamera, seconds: float, label: str) -> int:
+    """Discard every transition frame until the post-motion settling interval ends.
+
+    ``SafetyManager.move_xy_relative`` has already waited for the robot trajectory to
+    stop before this function is called. Frames received here may still contain
+    structural vibration, rolling-shutter distortion or auto-exposure transients, so
+    they are read and deliberately discarded. Target detection starts only afterwards.
+    """
+    if seconds <= 0:
+        return 0
+    print(f"{label}: robot stopped; discarding transition frames for {seconds:.2f}s...")
+    deadline = time.monotonic() + seconds
+    discarded_frames = 0
+    while time.monotonic() < deadline:
+        if camera.get_frame() is not None:
+            discarded_frames += 1
+    print(
+        f"{label}: discarded {discarded_frames} transition frames; "
+        "starting consecutive stable-centre detection"
+    )
+    return discarded_frames
 
 
 def move_to_baseline_xy(
@@ -161,7 +177,7 @@ def main() -> int:
         safety.move_to_observe_pose()
         safety.begin_alignment()
         baseline_robot_pose = np.asarray(robot.get_current_pose(), dtype=np.float64)
-        wait_for_settle(args.settle_time_s, "Observation pose")
+        wait_for_settle(camera, args.settle_time_s, "Observation pose")
         baseline = average_target_center(
             camera,
             detector,
@@ -178,7 +194,11 @@ def main() -> int:
         for dx_mm, dy_mm in offsets_mm:
             safety.move_xy_relative(float(dx_mm), float(dy_mm))
             try:
-                wait_for_settle(args.settle_time_s, f"Shift ({dx_mm:+.1f},{dy_mm:+.1f})mm")
+                wait_for_settle(
+                    camera,
+                    args.settle_time_s,
+                    f"Shift ({dx_mm:+.1f},{dy_mm:+.1f})mm",
+                )
                 shifted = average_target_center(
                     camera,
                     detector,
@@ -197,7 +217,7 @@ def main() -> int:
                     args.max_return_error_mm,
                 )
             delta = shifted - baseline
-            wait_for_settle(args.settle_time_s, "Returned baseline")
+            wait_for_settle(camera, args.settle_time_s, "Returned baseline")
             returned = average_target_center(
                 camera,
                 detector,
