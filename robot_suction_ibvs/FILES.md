@@ -35,7 +35,7 @@
 | `vision/detector.py` | HSV 分割、形态学处理、轮廓提取和像素尺寸筛选。 |
 | `vision/models.py` | 检测目标、检测结果和跟踪结果的数据结构。 |
 | `vision/tracker.py` | 对锁定目标做最近邻关联，不切换为其他目标。 |
-| `vision/visualization.py` | 为 PyQt 相机预览绘制目标轮廓、中心、编号和尺寸。 |
+| `vision/visualization.py` | 为 PyQt 相机预览绘制目标轮廓、编号和换算后的原图 `(u,v)` 坐标。 |
 | `control/ibvs.py` | 根据标定矩阵计算二维 XY 视觉伺服速度，并把终末像素差换算为相对 XY 位移。 |
 | `control/safety.py` | 所有机器人运动的安全网关：限总行程、限终末单次位移、断流、停止及 Z 轴动作。 |
 

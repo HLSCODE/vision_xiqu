@@ -249,6 +249,7 @@ class MainWindow(QMainWindow):
                 detection.frame_bgr,
                 detection.objects,
                 detection.valid_indices,
+                (detection.source_width, detection.source_height),
             )
         else:
             display_frame = frame

@@ -15,13 +15,15 @@ from vision.models import DetectedObject
 
 @dataclass(frozen=True, slots=True)
 class PreviewDetection:
-    """一帧预览图像的检测结果，坐标均属于预览图像。"""
+    """一帧预览检测结果，同时记录预览与原始采集分辨率。"""
 
     frame_bgr: np.ndarray
     objects: list[DetectedObject]
     valid_indices: frozenset[int]
     frame_width: int
     frame_height: int
+    source_width: int
+    source_height: int
 
     @property
     def valid_count(self) -> int:
@@ -103,6 +105,8 @@ class PreviewDetectionWorker(QThread):
                         valid_indices=valid_indices,
                         frame_width=frame_width,
                         frame_height=frame_height,
+                        source_width=source_width,
+                        source_height=source_height,
                     )
                 )
                 self._last_error = None
