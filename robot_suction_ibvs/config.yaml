@@ -9,7 +9,7 @@ camera:
   # 请求采集帧率，单位 FPS；实际帧率受相机、USB 带宽和曝光时间影响。
   fps: 30
   # OpenCV 视频源。Ubuntu 可填写 /dev/video6，也可填写整数索引（如 0）。
-  device_id: "/dev/video6"
+  device_id: "/dev/video18"
   video_path: null
   # 是否在控制器的原始图像检测前使用相机内参进行畸变校正。
   enable_undistort: false

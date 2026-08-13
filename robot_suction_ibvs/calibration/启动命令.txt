@@ -42,7 +42,11 @@ observe_z_mm 应与 observe_pose 的 Z 相同。
 python tools/inspect_detection.py --config config.yaml
 2. 执行标定
 关闭 GUI，确保相机没有被其他程序占用，然后运行：
-python /home/maic/shijue/robot_suction_ibvs/calibration/calibrate_servo_xy.py   --config /home/maic/shijue/robot_suction_ibvs/config.yaml   --frames 10
+python /home/maic/shijue/robot_suction_ibvs/calibration/calibrate_servo_xy.py \
+  --config /home/maic/shijue/robot_suction_ibvs/config.yaml \
+  --frames 10 \
+  --settle-time-s 2 \
+  --sample-timeout-s 20
 脚本会自动：
 连接相机。
 连接睿尔曼机械臂。
