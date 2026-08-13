@@ -87,6 +87,34 @@ def wait_for_settle(seconds: float, label: str) -> None:
         time.sleep(seconds)
 
 
+def move_to_baseline_xy(
+    safety: SafetyManager,
+    robot: RealRobot,
+    baseline_pose: np.ndarray,
+    tolerance_mm: float,
+) -> np.ndarray:
+    """Use robot feedback to correct XY back to the original calibration pose."""
+    current_pose = np.asarray(robot.get_current_pose(), dtype=np.float64)
+    correction_xy = baseline_pose[:2] - current_pose[:2]
+    if not np.all(np.isfinite(correction_xy)):
+        raise RuntimeError("Robot returned non-finite XY feedback while restoring calibration baseline")
+    if float(np.linalg.norm(correction_xy)) > 1e-6:
+        safety.move_xy_relative(float(correction_xy[0]), float(correction_xy[1]))
+    returned_pose = np.asarray(robot.get_current_pose(), dtype=np.float64)
+    feedback_error_xy = returned_pose[:2] - baseline_pose[:2]
+    feedback_error_mm = float(np.linalg.norm(feedback_error_xy))
+    print(
+        "Returned robot XY feedback error="
+        f"{feedback_error_mm:.4f}mm, dXY={feedback_error_xy.round(4).tolist()}mm"
+    )
+    if feedback_error_mm > tolerance_mm:
+        raise RuntimeError(
+            f"Robot XY feedback did not return to calibration baseline: {feedback_error_mm:.4f}mm > "
+            f"{tolerance_mm:.4f}mm"
+        )
+    return returned_pose
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Calibrate local 2D IBVS pixel/mm matrix A")
     parser.add_argument("--config", default="config.yaml")
@@ -95,6 +123,7 @@ def main() -> int:
     parser.add_argument("--sample-timeout-s", type=float, default=10.0)
     parser.add_argument("--settle-time-s", type=float, default=1.0)
     parser.add_argument("--max-return-error-px", type=float, default=3.0)
+    parser.add_argument("--max-return-error-mm", type=float, default=0.10)
     parser.add_argument("--max-fit-rms-px", type=float, default=2.0)
     parser.add_argument("--output", default=None, help="Defaults to ibvs.servo_A_path in config")
     args = parser.parse_args()
@@ -105,6 +134,7 @@ def main() -> int:
         or args.sample_timeout_s <= 0
         or args.settle_time_s < 0
         or args.max_return_error_px <= 0
+        or args.max_return_error_mm <= 0
         or args.max_fit_rms_px <= 0
     ):
         parser.error("jitter, timeout, settle-time, return-error and fit-RMS limits are invalid")
@@ -124,12 +154,13 @@ def main() -> int:
     output = config.path(args.output or config.ibvs.servo_A_path)
     offsets_mm = np.array([[-2, 0], [-1, 0], [1, 0], [2, 0], [0, -2], [0, -1], [0, 1], [0, 2]], dtype=np.float64)
     camera.open()
-    robot.connect()
     try:
+        robot.connect()
         work_frame_name = robot.get_current_work_frame_name()
         work_frame_pose = robot.get_current_work_frame_pose()
         safety.move_to_observe_pose()
         safety.begin_alignment()
+        baseline_robot_pose = np.asarray(robot.get_current_pose(), dtype=np.float64)
         wait_for_settle(args.settle_time_s, "Observation pose")
         baseline = average_target_center(
             camera,
@@ -157,8 +188,14 @@ def main() -> int:
                     f"Shift ({dx_mm:+.1f},{dy_mm:+.1f})mm",
                 )
             finally:
-                # 即使采样失败，也优先尝试回到本次微移前的位置。
-                safety.move_xy_relative(float(-dx_mm), float(-dy_mm))
+                # 即使采样失败，也根据当前机械臂反馈修正回最初绝对 XY，而不是假定
+                # 正反两条相对指令完全互逆。这样能暴露并补偿规划/反馈残差。
+                move_to_baseline_xy(
+                    safety,
+                    robot,
+                    baseline_robot_pose,
+                    args.max_return_error_mm,
+                )
             delta = shifted - baseline
             wait_for_settle(args.settle_time_s, "Returned baseline")
             returned = average_target_center(
@@ -172,8 +209,10 @@ def main() -> int:
             return_error = float(np.linalg.norm(returned - baseline))
             if return_error > args.max_return_error_px:
                 raise RuntimeError(
-                    f"Robot/camera did not return to the image baseline: {return_error:.3f}px > "
-                    f"{args.max_return_error_px:.3f}px"
+                    f"Image target did not return to baseline after robot XY feedback correction: "
+                    f"{return_error:.3f}px > {args.max_return_error_px:.3f}px. "
+                    "If robot feedback error above was small, the target/container/camera moved or the detector "
+                    "locked onto a different contour; inspect detection before retrying."
                 )
             pixel_deltas.append(delta)
             baseline = returned
@@ -205,13 +244,22 @@ def main() -> int:
         print(f"Saved {output} and its calibration-context sidecar")
         return 0
     finally:
-        try:
-            safety.stop_all()
-        finally:
+        cleanup_failures: list[str] = []
+        if robot.connected:
             try:
-                robot.disconnect()
-            finally:
-                camera.close()
+                safety.stop_all()
+            except Exception as exc:
+                cleanup_failures.append(f"stop robot: {exc}")
+        try:
+            robot.disconnect()
+        except Exception as exc:
+            cleanup_failures.append(f"disconnect robot: {exc}")
+        try:
+            camera.close()
+        except Exception as exc:
+            cleanup_failures.append(f"close camera: {exc}")
+        if cleanup_failures:
+            print("Cleanup warnings: " + "; ".join(cleanup_failures), file=sys.stderr)
 
 
 if __name__ == "__main__":

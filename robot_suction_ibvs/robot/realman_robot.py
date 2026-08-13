@@ -42,6 +42,7 @@ class RealRobot(RobotInterface):
         self._max_line_speed_m_s: float | None = None
         self._robot_info: dict[str, Any] | None = None
         self._last_planned_motion_at: float | None = None
+        self._motion_commanded = False
 
     @property
     def connected(self) -> bool:
@@ -68,6 +69,7 @@ class RealRobot(RobotInterface):
             ) from exc
 
         arm = RoboticArm(rm_thread_mode_e.RM_TRIPLE_MODE_E)
+        handle_created = False
         try:
             arm.rm_set_timeout(int(self.config.api_timeout_ms))
             handle = arm.rm_create_robot_arm(
@@ -79,6 +81,7 @@ class RealRobot(RobotInterface):
                 raise RealManSDKError(
                     f"连接睿尔曼机械臂失败：{self.config.ip}:{self.config.port} 返回无效句柄"
                 )
+            handle_created = True
 
             code, info = arm.rm_get_robot_info()
             self._check_code("读取机械臂型号信息", code)
@@ -111,14 +114,18 @@ class RealRobot(RobotInterface):
             )
             self._check_code("初始化笛卡尔速度透传", code)
         except Exception:
-            try:
-                arm.rm_delete_robot_arm()
-            except Exception:
-                pass
-            try:
-                type(arm).rm_destroy()
-            except Exception:
-                pass
+            # 官方 API 将“删除单个句柄”和“销毁全部全局线程”作为两种独立释放方式。
+            # 已创建句柄时只删除该句柄，不能紧接着再次调用全局 rm_destroy()。
+            if handle_created:
+                try:
+                    arm.rm_delete_robot_arm()
+                except Exception:
+                    pass
+            else:
+                try:
+                    type(arm).rm_destroy()
+                except Exception:
+                    pass
             raise
 
         with self._connection_lock:
@@ -127,35 +134,35 @@ class RealRobot(RobotInterface):
             self._robot_info = dict(info)
 
     def disconnect(self) -> None:
-        """先停止当前轨迹，再删除句柄并释放 SDK 全局线程。"""
+        """先停止当前轨迹，再按官方单连接流程删除机械臂句柄。"""
         with self._connection_lock:
             arm = self._arm
             self._arm = None
             self._max_line_speed_m_s = None
             self._robot_info = None
             self._last_planned_motion_at = None
+            motion_commanded = self._motion_commanded
+            self._motion_commanded = False
         if arm is None:
             return
 
         failures: list[str] = []
-        try:
-            code = arm.rm_set_arm_stop()
-            if code != 0:
-                failures.append(self._format_error("断开前停止机械臂", code))
-        except Exception as exc:
-            failures.append(f"断开前停止机械臂异常：{exc}")
+        if motion_commanded:
+            try:
+                code = arm.rm_set_arm_stop()
+                if code != 0:
+                    failures.append(self._format_error("断开前停止机械臂", code))
+            except Exception as exc:
+                failures.append(f"断开前停止机械臂异常：{exc}")
         try:
             code = arm.rm_delete_robot_arm()
             if code != 0:
                 failures.append(self._format_error("删除机械臂连接句柄", code))
         except Exception as exc:
             failures.append(f"删除机械臂连接句柄异常：{exc}")
-        try:
-            code = type(arm).rm_destroy()
-            if code != 0:
-                failures.append(self._format_error("释放睿尔曼 SDK", code))
-        except Exception as exc:
-            failures.append(f"释放睿尔曼 SDK 异常：{exc}")
+        # 不在 rm_delete_robot_arm() 后继续调用全局 rm_destroy()。API2 1.1.3 的
+        # 全局销毁会再次处理连接/线程；连续使用两套释放路径可能导致原生库崩溃，
+        # 也会破坏 GUI 后续重新连接同一机械臂的能力。
         if failures:
             raise RealManSDKError("；".join(failures))
 
@@ -229,6 +236,7 @@ class RealRobot(RobotInterface):
         # 30 Hz 控制循环无法满足高跟随 ≤10 ms 的要求，因此固定使用低跟随。
         code = arm.rm_movev_canfd(velocity_m_s, False, 0, 0)
         self._check_code("下发 XY 笛卡尔速度", code)
+        self._motion_commanded = True
 
     def stop_xy(self) -> None:
         """用全零笛卡尔速度终止 XY 透传；失败时退回轨迹缓停。"""
@@ -237,6 +245,7 @@ class RealRobot(RobotInterface):
             return
         code = arm.rm_movev_canfd([0.0] * 6, False, 0, 0)
         if code == 0:
+            self._motion_commanded = False
             return
         fallback_code = arm.rm_set_arm_slow_stop()
         if fallback_code != 0:
@@ -244,15 +253,19 @@ class RealRobot(RobotInterface):
                 f"停止 XY 失败：{self._format_error('零速度指令', code)}；"
                 f"{self._format_error('轨迹缓停', fallback_code)}"
             )
+        self._motion_commanded = False
 
     def stop_all(self) -> None:
         """终止当前轨迹；不会自动触发或解除控制器的锁存急停。"""
         arm = self._connected_or_none()
         if arm is None:
             return
+        if not self._motion_commanded:
+            return
         code = arm.rm_set_arm_stop()
         self._check_code("停止机械臂全部运动", code)
         self._last_planned_motion_at = None
+        self._motion_commanded = False
 
     def get_current_pose(self) -> Sequence[float]:
         """返回 ``[x_mm, y_mm, z_mm, rx_rad, ry_rad, rz_rad]``。"""
@@ -315,6 +328,7 @@ class RealRobot(RobotInterface):
             grace_elapsed = commanded_at is None or time.monotonic() - commanded_at >= 0.25
             if not moving and (seen_moving or grace_elapsed):
                 self._last_planned_motion_at = None
+                self._motion_commanded = False
                 return
             if deadline is not None and time.monotonic() >= deadline:
                 self.stop_all()
@@ -327,6 +341,7 @@ class RealRobot(RobotInterface):
         code = arm.rm_movej_p(sdk_pose, self._percent(speed_percent), 0, 0, 0)
         self._check_code(operation, code)
         self._last_planned_motion_at = time.monotonic()
+        self._motion_commanded = True
 
     def _move_linear(self, pose: Sequence[float], speed_percent: int, operation: str) -> None:
         arm = self._require_connected()
@@ -334,6 +349,7 @@ class RealRobot(RobotInterface):
         code = arm.rm_movel(sdk_pose, self._percent(speed_percent), 0, 0, 0)
         self._check_code(operation, code)
         self._last_planned_motion_at = time.monotonic()
+        self._motion_commanded = True
 
     def _speed_percent(self, speed_mm_s: float) -> int:
         if not math.isfinite(speed_mm_s) or speed_mm_s <= 0:
