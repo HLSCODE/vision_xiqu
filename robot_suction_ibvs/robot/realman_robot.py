@@ -93,7 +93,7 @@ class RealRobot(RobotInterface):
             code, state = arm.rm_get_current_arm_state()
             self._check_code("读取机械臂当前状态", code)
             errors = state.get("err", {}) if isinstance(state, dict) else {}
-            if errors.get("err_len", 0):
+            if code != 0:
                 raise RealManSDKError(
                     f"机械臂存在未处理错误 {errors.get('err', [])}；请先在示教器排除，程序不会自动清错"
                 )

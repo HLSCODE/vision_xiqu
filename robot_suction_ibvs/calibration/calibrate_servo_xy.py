@@ -57,7 +57,7 @@ def average_target_center(
 def main() -> int:
     parser = argparse.ArgumentParser(description="Calibrate local 2D IBVS pixel/mm matrix A")
     parser.add_argument("--config", default="config.yaml")
-    parser.add_argument("--frames", type=int, default=10, help="Frames averaged after every jog")
+    parser.add_argument("--frames", typaverage_target_centere=int, default=10, help="Frames averaged after every jog")
     parser.add_argument("--max-jitter-px", type=float, default=3.0)
     parser.add_argument("--max-return-error-px", type=float, default=3.0)
     parser.add_argument("--max-fit-rms-px", type=float, default=2.0)
