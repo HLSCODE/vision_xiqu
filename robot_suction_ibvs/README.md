@@ -83,6 +83,15 @@ final_dXY_mm = inv(A_px_per_mm) * (suction_ref - current_pixel)
 
    `calibrate_servo_xy.py` 运行期间画面中必须始终只有一个尺寸合格且静止的目标；
    工具会检查采样抖动、机械臂微移后回位误差、拟合秩、条件数与拟合 RMS，不合格时不会保存矩阵。
+   每次到位后默认等待 1 秒，并在最长 10 秒内寻找连续稳定的 10 帧窗口。曝光稳定较慢时可增加：
+
+   ```bash
+   python calibration/calibrate_servo_xy.py --config config.yaml --frames 10 \
+     --settle-time-s 2 --sample-timeout-s 20
+   ```
+
+   不建议直接把 `--max-jitter-px` 从 3 调到几十或上百；这种波动通常表示自动曝光尚未稳定、
+   黑色轮廓发生粘连/分裂、画面中存在多个合格目标，或相机/目标/机械臂仍在移动。
 
    预对准标定画面中也只保留同一个尺寸合格目标：吸管对准目标且目标中心可检测时保持静止，
    等待采满连续帧后按 `A`；然后保持 Z、姿态和目标不变，只移动 XY 到目标完全无遮挡的

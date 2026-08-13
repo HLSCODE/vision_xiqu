@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import argparse
+from collections import deque
 import logging
 import sys
+import time
 from pathlib import Path
 
 if __package__ in (None, ""):
@@ -25,48 +27,87 @@ def average_target_center(
     detector: HSVObjectDetector,
     frames: int,
     max_jitter_px: float,
+    max_wait_s: float,
+    label: str,
 ) -> np.ndarray:
-    """Average consecutive frames containing exactly one stable, size-eligible target."""
-    centres: list[np.ndarray] = []
-    for _ in range(frames * 5):
+    """Wait for a stable sliding window containing exactly one eligible target."""
+    centres: deque[np.ndarray] = deque(maxlen=frames)
+    deadline = time.monotonic() + max_wait_s
+    last_jitter: float | None = None
+    valid_frames = 0
+    invalid_frames = 0
+    while time.monotonic() < deadline:
         frame = camera.get_frame()
         if frame is None:
             centres.clear()
+            invalid_frames += 1
             continue
         objects = detector.valid_objects(detector.detect(frame).objects)
         if len(objects) != 1:
             centres.clear()
+            invalid_frames += 1
             continue
         centres.append(objects[0].center.copy())
-        if len(centres) >= frames:
-            break
-    if len(centres) < frames:
-        raise RuntimeError(
-            f"Only collected {len(centres)}/{frames} consecutive frames with exactly one valid target"
+        valid_frames += 1
+        if len(centres) < frames:
+            continue
+        points = np.stack(centres).astype(np.float64)
+        centre = np.mean(points, axis=0)
+        last_jitter = float(np.max(np.linalg.norm(points - centre, axis=1)))
+        if last_jitter <= max_jitter_px:
+            print(
+                f"{label}: stable centre={centre.round(3).tolist()} px, "
+                f"jitter={last_jitter:.3f}px"
+            )
+            return centre
+
+    if len(centres) >= 2:
+        points = np.stack(centres).astype(np.float64)
+        u_range = (float(np.min(points[:, 0])), float(np.max(points[:, 0])))
+        v_range = (float(np.min(points[:, 1])), float(np.max(points[:, 1])))
+        range_text = (
+            f"last_window_u=[{u_range[0]:.1f},{u_range[1]:.1f}]px, "
+            f"last_window_v=[{v_range[0]:.1f},{v_range[1]:.1f}]px"
         )
-    points = np.stack(centres).astype(np.float64)
-    centre = np.mean(points, axis=0)
-    jitter = float(np.max(np.linalg.norm(points - centre, axis=1)))
-    if jitter > max_jitter_px:
-        raise RuntimeError(
-            f"Target jitter {jitter:.3f}px exceeds configured limit {max_jitter_px:.3f}px"
-        )
-    return centre
+    else:
+        range_text = "last_window has fewer than two valid centres"
+    jitter_text = "not available" if last_jitter is None else f"{last_jitter:.3f}px"
+    raise RuntimeError(
+        f"{label}: no stable {frames}-frame target window within {max_wait_s:.1f}s; "
+        f"last jitter={jitter_text}, limit={max_jitter_px:.3f}px, "
+        f"valid_frames={valid_frames}, invalid_frames={invalid_frames}, {range_text}. "
+        "Keep exactly one eligible target still, wait for robot/camera exposure to settle, and check HSV contours."
+    )
+
+
+def wait_for_settle(seconds: float, label: str) -> None:
+    """Allow robot vibration, queued frames, and camera auto-exposure to settle."""
+    if seconds > 0:
+        print(f"{label}: waiting {seconds:.2f}s for motion/image settling...")
+        time.sleep(seconds)
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Calibrate local 2D IBVS pixel/mm matrix A")
     parser.add_argument("--config", default="config.yaml")
-    parser.add_argument("--frames", typaverage_target_centere=int, default=10, help="Frames averaged after every jog")
+    parser.add_argument("--frames", type=int, default=10, help="Frames averaged after every jog")
     parser.add_argument("--max-jitter-px", type=float, default=3.0)
+    parser.add_argument("--sample-timeout-s", type=float, default=10.0)
+    parser.add_argument("--settle-time-s", type=float, default=1.0)
     parser.add_argument("--max-return-error-px", type=float, default=3.0)
     parser.add_argument("--max-fit-rms-px", type=float, default=2.0)
     parser.add_argument("--output", default=None, help="Defaults to ibvs.servo_A_path in config")
     args = parser.parse_args()
     if args.frames < 3:
         parser.error("--frames must be at least 3")
-    if args.max_jitter_px <= 0 or args.max_return_error_px <= 0 or args.max_fit_rms_px <= 0:
-        parser.error("jitter, return-error and fit-RMS limits must be positive")
+    if (
+        args.max_jitter_px <= 0
+        or args.sample_timeout_s <= 0
+        or args.settle_time_s < 0
+        or args.max_return_error_px <= 0
+        or args.max_fit_rms_px <= 0
+    ):
+        parser.error("jitter, timeout, settle-time, return-error and fit-RMS limits are invalid")
     config = load_config(args.config)
     logger = logging.getLogger("calibrate_servo_xy")
     logger.addHandler(logging.StreamHandler())
@@ -89,7 +130,15 @@ def main() -> int:
         work_frame_pose = robot.get_current_work_frame_pose()
         safety.move_to_observe_pose()
         safety.begin_alignment()
-        baseline = average_target_center(camera, detector, args.frames, args.max_jitter_px)
+        wait_for_settle(args.settle_time_s, "Observation pose")
+        baseline = average_target_center(
+            camera,
+            detector,
+            args.frames,
+            args.max_jitter_px,
+            args.sample_timeout_s,
+            "Baseline",
+        )
         pixel_deltas: list[np.ndarray] = []
         print(
             "Move target setup complete. Sampling commanded XY increments at fixed observation height "
@@ -98,12 +147,28 @@ def main() -> int:
         for dx_mm, dy_mm in offsets_mm:
             safety.move_xy_relative(float(dx_mm), float(dy_mm))
             try:
-                shifted = average_target_center(camera, detector, args.frames, args.max_jitter_px)
+                wait_for_settle(args.settle_time_s, f"Shift ({dx_mm:+.1f},{dy_mm:+.1f})mm")
+                shifted = average_target_center(
+                    camera,
+                    detector,
+                    args.frames,
+                    args.max_jitter_px,
+                    args.sample_timeout_s,
+                    f"Shift ({dx_mm:+.1f},{dy_mm:+.1f})mm",
+                )
             finally:
                 # 即使采样失败，也优先尝试回到本次微移前的位置。
                 safety.move_xy_relative(float(-dx_mm), float(-dy_mm))
             delta = shifted - baseline
-            returned = average_target_center(camera, detector, args.frames, args.max_jitter_px)
+            wait_for_settle(args.settle_time_s, "Returned baseline")
+            returned = average_target_center(
+                camera,
+                detector,
+                args.frames,
+                args.max_jitter_px,
+                args.sample_timeout_s,
+                "Returned baseline",
+            )
             return_error = float(np.linalg.norm(returned - baseline))
             if return_error > args.max_return_error_px:
                 raise RuntimeError(
