@@ -183,7 +183,15 @@ def main() -> int:
     parser.add_argument("--max-jitter-px", type=float, default=3.0)
     parser.add_argument("--sample-timeout-s", type=float, default=10.0)
     parser.add_argument("--settle-time-s", type=float, default=1.0)
-    parser.add_argument("--max-return-error-px", type=float, default=3.0)
+    parser.add_argument(
+        "--max-return-error-px",
+        type=float,
+        default=3.0,
+        help=(
+            "Maximum image-return residual after subtracting the offset predicted "
+            "from robot feedback (not the raw image displacement)"
+        ),
+    )
     parser.add_argument("--max-return-error-mm", type=float, default=0.10)
     parser.add_argument(
         "--max-return-corrections",
@@ -240,6 +248,8 @@ def main() -> int:
         )
         robot_offsets: list[np.ndarray] = []
         pixel_deltas: list[np.ndarray] = []
+        return_robot_offsets: list[np.ndarray] = []
+        return_pixel_deltas: list[np.ndarray] = []
         print(
             "Move target setup complete. Sampling commanded XY increments at fixed observation height "
             f"in work frame {work_frame_name!r}."
@@ -267,7 +277,7 @@ def main() -> int:
             finally:
                 # 即使采样失败，也根据当前机械臂反馈修正回最初绝对 XY，而不是假定
                 # 正反两条相对指令完全互逆。这样能暴露并补偿规划/反馈残差。
-                move_to_baseline_xy(
+                returned_robot_pose = move_to_baseline_xy(
                     safety,
                     robot,
                     baseline_robot_pose,
@@ -289,22 +299,20 @@ def main() -> int:
                 args.sample_timeout_s,
                 "Returned baseline",
             )
-            return_error = float(np.linalg.norm(returned - baseline))
-            if return_error > args.max_return_error_px:
-                raise RuntimeError(
-                    f"Image target did not return to baseline after robot XY feedback correction: "
-                    f"{return_error:.3f}px > {args.max_return_error_px:.3f}px. "
-                    "If robot feedback error above was small, the target/container/camera moved or the detector "
-                    "locked onto a different contour; inspect detection before retrying."
-                )
+            return_pixel_delta = returned - baseline
+            return_robot_offset_xy = returned_robot_pose[:2] - sample_origin_pose[:2]
+            raw_return_error = float(np.linalg.norm(return_pixel_delta))
             robot_offsets.append(actual_offset_xy)
             pixel_deltas.append(delta)
+            return_robot_offsets.append(return_robot_offset_xy)
+            return_pixel_deltas.append(return_pixel_delta)
             baseline = returned
             print(
                 f"command dXY=({dx_mm:+.1f}, {dy_mm:+.1f})mm, "
                 f"feedback dXY={actual_offset_xy.round(4).tolist()}mm -> "
                 f"dUV={delta.round(3).tolist()}px, "
-                f"return_error={return_error:.3f}px"
+                f"raw_return_shift={raw_return_error:.3f}px, "
+                f"return_feedback_dXY={return_robot_offset_xy.round(4).tolist()}mm"
             )
         measured_offsets = np.stack(robot_offsets)
         measured_deltas = np.stack(pixel_deltas)
@@ -313,10 +321,21 @@ def main() -> int:
             measured_deltas,
         )
         condition = float(np.linalg.cond(matrix))
+        measured_return_offsets = np.stack(return_robot_offsets)
+        measured_return_deltas = np.stack(return_pixel_deltas)
+        predicted_return_deltas = measured_return_offsets @ matrix.T
+        return_residual_vectors = measured_return_deltas - predicted_return_deltas
+        return_residual_norms = np.linalg.norm(return_residual_vectors, axis=1)
+        max_return_residual_px = float(np.max(return_residual_norms))
+        return_residual_rms_px = float(np.sqrt(np.mean(return_residual_norms**2)))
         print("A (px/mm) =\n", matrix)
         print(
             f"fit_rms={fit_rms_px:.6f}px, rank={rank}, condition={condition:.3f}, "
             f"singular_values={singular_values}"
+        )
+        print(
+            "feedback-explained return residual: "
+            f"max={max_return_residual_px:.3f}px, rms={return_residual_rms_px:.3f}px"
         )
         if rank < 2:
             raise RuntimeError(f"Calibration fit rank is {rank}; both robot XY axes must be observable")
@@ -325,6 +344,13 @@ def main() -> int:
         if fit_rms_px > args.max_fit_rms_px:
             raise RuntimeError(
                 f"Calibration fit RMS {fit_rms_px:.3f}px exceeds {args.max_fit_rms_px:.3f}px"
+            )
+        if max_return_residual_px > args.max_return_error_px:
+            raise RuntimeError(
+                "Image return is inconsistent with the corresponding robot feedback: "
+                f"max unexplained residual {max_return_residual_px:.3f}px > "
+                f"{args.max_return_error_px:.3f}px. The target/container/camera may have moved, "
+                "or HSV detection may have switched contours."
             )
         metadata = make_metadata(config, "servo_A", work_frame_name, work_frame_pose)
         save_calibration_array(output, matrix, metadata)
