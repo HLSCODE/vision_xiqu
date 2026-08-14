@@ -111,6 +111,60 @@ def read_robot_pose(robot: RealRobot, label: str) -> np.ndarray:
     return pose
 
 
+def return_to_observe_pose_and_sample(
+    safety: SafetyManager,
+    robot: RealRobot,
+    camera: OpenCVCamera,
+    detector: HSVObjectDetector,
+    reference_center: np.ndarray,
+    reference_pose: np.ndarray,
+    frames: int,
+    max_jitter_px: float,
+    sample_timeout_s: float,
+    settle_time_s: float,
+    max_return_error_px: float,
+    attempts: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, float]:
+    """Return to the confirmed pose and compare every retry with the fixed first centre."""
+    last_message = "no return sample was collected"
+    for attempt in range(1, attempts + 1):
+        safety.move_to_observe_pose()
+        returned_pose = read_robot_pose(robot, "Returned observation-pose feedback")
+        label = f"Returned observation pose [{attempt}/{attempts}]"
+        wait_for_settle(camera, settle_time_s, label)
+        returned_center = average_target_center(
+            camera,
+            detector,
+            frames,
+            max_jitter_px,
+            sample_timeout_s,
+            label,
+        )
+        image_delta = returned_center - reference_center
+        image_error = float(np.linalg.norm(image_delta))
+        feedback_delta_xy = returned_pose[:2] - reference_pose[:2]
+        print(
+            f"{label}: dUV_from_fixed_reference={image_delta.round(3).tolist()}px, "
+            f"error={image_error:.3f}px, "
+            f"feedback_dXY_from_reference={feedback_delta_xy.round(4).tolist()}mm"
+        )
+        if image_error <= max_return_error_px:
+            return returned_center, returned_pose, image_delta, image_error
+        last_message = (
+            f"{image_error:.3f}px > {max_return_error_px:.3f}px, "
+            f"dUV={image_delta.round(3).tolist()}px, "
+            f"feedback dXY={feedback_delta_xy.round(4).tolist()}mm"
+        )
+        if attempt < attempts:
+            print(f"{label}: retrying the same absolute observe_pose once more...")
+
+    raise RuntimeError(
+        "Image target did not return to the fixed confirmed observation pose after "
+        f"{attempts} absolute-pose command(s): {last_message}. "
+        "Re-check config.robot.observe_pose, the active work frame, and target/detector stability."
+    )
+
+
 def fit_servo_matrix(
     robot_offsets_mm: np.ndarray,
     pixel_deltas_px: np.ndarray,
@@ -143,6 +197,12 @@ def main() -> int:
         default=3.0,
         help="Maximum raw image-centre difference after returning to observe_pose",
     )
+    parser.add_argument(
+        "--observe-return-attempts",
+        type=int,
+        default=2,
+        help="Number of identical absolute observe_pose commands allowed to recover the reference centre",
+    )
     parser.add_argument("--max-fit-rms-px", type=float, default=2.0)
     parser.add_argument("--output", default=None, help="Defaults to ibvs.servo_A_path in config")
     args = parser.parse_args()
@@ -153,6 +213,7 @@ def main() -> int:
         or args.sample_timeout_s <= 0
         or args.settle_time_s < 0
         or args.max_return_error_px <= 0
+        or args.observe_return_attempts < 1
         or args.max_fit_rms_px <= 0
     ):
         parser.error("jitter, timeout, settle-time, return-error and fit-RMS limits are invalid")
@@ -179,7 +240,7 @@ def main() -> int:
         safety.move_to_observe_pose()
         safety.begin_alignment()
         wait_for_settle(camera, args.settle_time_s, "Observation pose")
-        baseline = average_target_center(
+        reference_center = average_target_center(
             camera,
             detector,
             args.frames,
@@ -187,6 +248,7 @@ def main() -> int:
             args.sample_timeout_s,
             "Baseline",
         )
+        reference_robot_pose = read_robot_pose(robot, "Fixed observation-pose feedback")
         robot_offsets: list[np.ndarray] = []
         pixel_deltas: list[np.ndarray] = []
         print(
@@ -200,6 +262,7 @@ def main() -> int:
         for dx_mm, dy_mm in offsets_mm:
             # Pair every image baseline with the feedback pose from which this jog starts.
             sample_origin_pose = read_robot_pose(robot, "Pre-jog feedback")
+            shifted_sample_complete = False
             try:
                 safety.move_xy_relative(float(dx_mm), float(dy_mm))
                 wait_for_settle(
@@ -216,44 +279,42 @@ def main() -> int:
                     f"Shift ({dx_mm:+.1f},{dy_mm:+.1f})mm",
                 )
                 shifted_robot_pose = read_robot_pose(robot, "Post-jog feedback")
+                shifted_sample_complete = True
             finally:
-                # 用与标定起始时相同的已确认观察位绝对回位。这与手动输入原位姿
-                # 的流程一致，不能由中间反馈位姿再拼出一个相对回位目标。
-                safety.move_to_observe_pose()
-                returned_robot_pose = read_robot_pose(robot, "Returned observation-pose feedback")
+                # 若移动或图像采样异常，仍立即回到已确认的安全观察位。
+                # 正常路径的绝对回位与图像检查统一由下方函数执行，避免重复下发。
+                if not shifted_sample_complete:
+                    safety.move_to_observe_pose()
             actual_offset_xy = shifted_robot_pose[:2] - sample_origin_pose[:2]
             if float(np.linalg.norm(actual_offset_xy)) <= 1e-6:
                 raise RuntimeError(
                     f"Robot feedback reported no XY motion for command ({dx_mm:+.1f},{dy_mm:+.1f})mm"
                 )
-            delta = shifted - baseline
-            wait_for_settle(camera, args.settle_time_s, "Returned baseline")
-            returned = average_target_center(
-                camera,
-                detector,
-                args.frames,
-                args.max_jitter_px,
-                args.sample_timeout_s,
-                "Returned baseline",
-            )
-            return_pixel_delta = returned - baseline
-            return_robot_offset_xy = returned_robot_pose[:2] - sample_origin_pose[:2]
-            raw_return_error = float(np.linalg.norm(return_pixel_delta))
-            if raw_return_error > args.max_return_error_px:
-                raise RuntimeError(
-                    "Image target did not return to the confirmed observation pose: "
-                    f"{raw_return_error:.3f}px > {args.max_return_error_px:.3f}px, "
-                    f"dUV={return_pixel_delta.round(3).tolist()}px. "
-                    "Re-check config.robot.observe_pose, the active work frame, and target/detector stability."
+            delta = shifted - reference_center
+            returned, returned_robot_pose, return_pixel_delta, raw_return_error = (
+                return_to_observe_pose_and_sample(
+                    safety,
+                    robot,
+                    camera,
+                    detector,
+                    reference_center,
+                    reference_robot_pose,
+                    args.frames,
+                    args.max_jitter_px,
+                    args.sample_timeout_s,
+                    args.settle_time_s,
+                    args.max_return_error_px,
+                    args.observe_return_attempts,
                 )
+            )
+            return_robot_offset_xy = returned_robot_pose[:2] - reference_robot_pose[:2]
             robot_offsets.append(actual_offset_xy)
             pixel_deltas.append(delta)
-            baseline = returned
             print(
                 f"command dXY=({dx_mm:+.1f}, {dy_mm:+.1f})mm, "
                 f"feedback dXY={actual_offset_xy.round(4).tolist()}mm -> "
                 f"dUV={delta.round(3).tolist()}px, "
-                f"raw_return_shift={raw_return_error:.3f}px, "
+                f"fixed_return_error={raw_return_error:.3f}px, "
                 f"return_feedback_dXY={return_robot_offset_xy.round(4).tolist()}mm"
             )
         measured_offsets = np.stack(robot_offsets)
