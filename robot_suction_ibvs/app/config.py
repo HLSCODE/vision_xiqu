@@ -49,9 +49,6 @@ class IBVSConfig:
     slowdown_error_px: float
     max_acceleration_mm_s2: float
     servo_A_path: str
-    prealign_offset_px: tuple[float, float]
-    prealign_offset_confirmed: bool
-    final_approach_max_mm: float
 
 
 @dataclass(frozen=True)
@@ -171,12 +168,6 @@ def _validate(config: AppConfig) -> None:
     if not math.isfinite(config.ibvs.slowdown_error_px) or config.ibvs.slowdown_error_px < 0:
         raise ValueError("ibvs.slowdown_error_px must be non-negative and finite")
     _require_positive("ibvs.max_acceleration_mm_s2", config.ibvs.max_acceleration_mm_s2)
-    _require_positive("ibvs.final_approach_max_mm", config.ibvs.final_approach_max_mm)
-    if len(config.ibvs.prealign_offset_px) != 2 or not all(
-        math.isfinite(value) for value in config.ibvs.prealign_offset_px
-    ):
-        raise ValueError("ibvs.prealign_offset_px must contain two finite values")
-
     if len(config.robot.observe_pose) != 6 or not all(math.isfinite(value) for value in config.robot.observe_pose):
         raise ValueError("robot.observe_pose must contain six finite values")
     if not str(config.robot.ip).strip():
@@ -253,7 +244,7 @@ def load_config(path: str | Path) -> AppConfig:
             **{**vision, "hsv_lower": tuple(vision["hsv_lower"]), "hsv_upper": tuple(vision["hsv_upper"])}
         ),
         tracking=TrackingConfig(**tracking),
-        ibvs=IBVSConfig(**{**ibvs, "prealign_offset_px": tuple(ibvs["prealign_offset_px"])}),
+        ibvs=IBVSConfig(**ibvs),
         robot=RobotConfig(**{**robot, "observe_pose": tuple(robot["observe_pose"])}),
         suction=SuctionConfig(**suction),
         safety=SafetyConfig(**safety),

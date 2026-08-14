@@ -29,15 +29,15 @@
 | --- | --- |
 | `app/config.py` | 读取并校验 YAML 配置，提供带类型的配置对象。 |
 | `app/calibration_data.py` | 保存/读取标定数组及 JSON 上下文，校验分辨率、内参、观察位和工作坐标系一致性。 |
-| `app/state.py` | 定义 INIT、检测、预对准 IBVS、终末 XY、下降、吸取、恢复等状态。 |
-| `app/controller.py` | 显式状态机；实现检测、锁定、可见区预对准、受限终末 XY、吸取和回观察位循环。 |
+| `app/state.py` | 定义初始化、检测、直接 IBVS 对准、下降、吸取、恢复等状态。 |
+| `app/controller.py` | 显式状态机；实现检测、锁定、直接对准吸管轴线参考像素、下降、吸取和回观察位循环。 |
 | `app/logging_utils.py` | 创建会话日志和可选 CSV 控制记录。 |
 | `vision/detector.py` | HSV 分割、形态学处理、轮廓提取和像素尺寸筛选。 |
 | `vision/models.py` | 检测目标、检测结果和跟踪结果的数据结构。 |
 | `vision/tracker.py` | 对锁定目标做最近邻关联，不切换为其他目标。 |
 | `vision/visualization.py` | 为 PyQt 相机预览绘制目标轮廓、编号和换算后的原图 `(u,v)` 坐标。 |
-| `control/ibvs.py` | 根据标定矩阵计算二维 XY 视觉伺服速度，并把终末像素差换算为相对 XY 位移。 |
-| `control/safety.py` | 所有机器人运动的安全网关：限总行程、限终末单次位移、断流、停止及 Z 轴动作。 |
+| `control/ibvs.py` | 根据标定矩阵计算二维 XY 视觉伺服速度。 |
+| `control/safety.py` | 所有机器人运动的安全网关：限制总行程与单次相对位移、断流、停止及 Z 轴动作。 |
 
 ## 硬件适配
 
@@ -55,7 +55,7 @@
 | --- | --- |
 | `calibration/calibrate_camera.py` | 用棋盘格图像标定可选相机内参和畸变。 |
 | `calibration/calibrate_servo_xy.py` | 通过已知 XY 微位移拟合并验证 `servo_A.npy`，同时保存标定上下文 JSON。 |
-| `calibration/calibrate_prealign.py` | 分别采集吸管对准位和无遮挡预对准位的目标像素中心，保存 `suction_ref.npy` 及上下文，计算像素偏移与终末 XY，并可在明确确认后写入配置。 |
+| `calibration/calibrate_suction_ref.py` | 在吸管轴线已正对一个可见目标时，采集稳定的目标中心，保存直接 IBVS 使用的 `suction_ref.npy` 及上下文。 |
 | `tools/hsv_tuner.py` | 用滑块现场调 HSV 阈值并保存 JSON。 |
 | `tools/inspect_camera.py` | 检查相机设备、分辨率、帧率与断流。 |
 | `tools/inspect_detection.py` | 检查 HSV 轮廓、`size_px` 与尺寸筛选结果。 |

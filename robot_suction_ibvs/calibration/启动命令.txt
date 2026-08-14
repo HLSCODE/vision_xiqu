@@ -76,79 +76,21 @@ Saved data/servo_A.npy and its calibration-context sidecar
 矩阵秩必须为 2。
 条件数不能过大。
 不合格时脚本不会保存错误矩阵。
-四、标定吸管对准点和预对准偏移
-这一步使用 [calibrate_prealign.py](C:/Users/PC/Desktop/shijue/robot_suction_ibvs/calibration/calibrate_prealign.py)，脚本本身不会移动机械臂，需要手动通过示教器移动 XY。
-1. 对准位采样
-准备条件：
-继续使用同一个目标。
-目标不能移动。
-相机分辨率、观察 Z、末端姿态完全不变。
-只能移动机械臂 XY。
-先让吸管轴线准确位于目标正上方。
-如果吸管此时会遮住目标，可以：
-先用吸管完成机械对准。
-记录并保持机械臂位姿。
-小心拆下吸管。
-不能移动相机、机械臂和目标。
-运行：
-python calibration/calibrate_prealign.py \
+四、标定吸管轴线参考像素
+这一步使用 `calibrate_suction_ref.py`。脚本不会移动机械臂；需要先手动将吸管轴线准确放到一个可稳定检测目标的正上方。由于此时镜头仍可看到目标中心，不需要预对准位，也不需要记录任何像素偏移。
+
+保持目标、相机分辨率、观察 Z、末端姿态和工作坐标系不变，然后运行：
+python calibration/calibrate_suction_ref.py \
   --config config.yaml \
   --frames 20
-窗口进入第一阶段：
-ALIGN: press A
-等待显示：
-valid targets=1
-samples=20/20
-jitter <= 3px
-然后按 A。
-这一点会成为：
-suction_ref_px
-也就是吸管轴线对准目标时的目标像素坐标。
-2. 预对准位采样
-保持：
-目标不动。
-Z 不变。
-末端姿态不变。
-只移动机械臂 XY。
-手动移动机械臂到预对准位置。这个位置应该满足：
-安装吸管后目标仍然完全可见。
-距最终对准位置不要太远。
-吸管不会挡住目标中心。
-后续可以通过一次短 XY 运动到达目标正上方。
-窗口会显示：
-PREALIGN: press P
-等待重新采满 20 帧且目标稳定，然后按 P。
-脚本会计算：
-prealign_offset_px
-    = 预对准时目标中心 - 对准时目标中心
 
-final_xy
-    = inv(servo_A) × (-prealign_offset_px)
-成功后生成：
+窗口显示 `samples=20/20` 且抖动满足限制后，按 A 保存。它生成：
 data/suction_ref.npy
 data/suction_ref.npy.json
-同时终端会输出需要填写的配置，例如：
-prealign_offset_px: [120.5, -65.2]
-prealign_offset_confirmed: true
-五、确认预对准位置真的无遮挡
-如果前面拆下了吸管，先不要直接确认。
-需要：
-重新装好吸管。
-确保相机位置没有发生变化。
-将机械臂移动到刚才的预对准位。
-确认目标中心依然可以完整检测。
-确认吸管没有进入目标轮廓或中心区域。
-确认后，把终端输出填入配置：
-ibvs:
-  prealign_offset_px: [实际du, 实际dv]
-  prealign_offset_confirmed: true
-也可以在已经验证无遮挡的前提下，重新运行并自动写入：
-python calibration/calibrate_prealign.py \
-  --config config.yaml \
-  --frames 20 \
-  --apply-config \
-  --confirm-target-visible
-六、标定完成后应有的文件
+
+该像素中心就是 `suction_ref_px`：运行时 IBVS 直接把检测到的目标中心移动到此像素；稳定后立即下移吸取，没有额外的终末 XY 或预对准动作。
+
+五、标定完成后应有的文件
 最终需要：
 data/servo_A.npy
 data/servo_A.npy.json
@@ -161,7 +103,7 @@ data/suction_ref.npy.json
 机械臂工作坐标系。
 标定文件之间的对应关系。
 修改相机分辨率、观察位姿、工作坐标系或重新安装相机后，都需要重新标定。
-七、首次实机验证
+六、首次实机验证
 建议先保持：
 robot:
   z_motion_confirmed: false
@@ -169,8 +111,8 @@ robot:
 机械臂到达观察位。
 选择正确目标。
 IBVS 移动方向正确。
-目标稳定到达无遮挡预对准点。
-终末 XY 移动后吸管到达目标正上方。
+目标中心稳定到达吸管轴线参考像素。
+此时吸管位于目标正上方。
 程序在准备下降时因为 Z 未确认而停止。
 这次测试不会下降，也不会发送 ADP 吸液命令。
 确认 XY 完全正确后，再填写真实：

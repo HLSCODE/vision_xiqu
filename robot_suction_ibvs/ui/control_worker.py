@@ -34,7 +34,7 @@ TERMINAL_STATES = {
 
 
 def load_runtime_calibration(config: AppConfig) -> tuple[np.ndarray, np.ndarray, CalibrationMetadata]:
-    """加载 GUI 自动吸取必需的 IBVS 矩阵和吸盘参考像素。"""
+    """加载 GUI 自动吸取必需的 IBVS 矩阵和吸管轴线参考像素。"""
     servo_path = config.path(config.ibvs.servo_A_path)
     reference_path = config.path(config.suction.suction_ref_path)
     matrix, servo_metadata = load_calibration_array(servo_path, "servo_A")
@@ -46,7 +46,7 @@ def load_runtime_calibration(config: AppConfig) -> tuple[np.ndarray, np.ndarray,
     require_matching_context(servo_metadata, reference_metadata)
     current_servo_hash = file_sha256(servo_path)
     if reference_metadata.servo_A_sha256 != current_servo_hash:
-        raise ValueError("suction_ref 对应的 servo_A 已被替换，请重新执行预对准标定")
+        raise ValueError("suction_ref 对应的 servo_A 已被替换，请重新执行吸管参考点标定")
     return matrix.astype(np.float64), reference.astype(np.float64), servo_metadata
 
 
@@ -88,7 +88,7 @@ class ControlWorker(QThread):
         pick_count = 0
         try:
             session = SessionLogger(self.config.path("logs"), self.config.system.save_csv)
-            self.log_message.emit("正在加载 servo_A 和吸盘参考像素标定文件……")
+            self.log_message.emit("正在加载 servo_A 和吸管轴线参考像素标定文件……")
             servo_A, suction_ref, calibration_metadata = load_runtime_calibration(self.config)
 
             detector = HSVObjectDetector(
@@ -101,7 +101,7 @@ class ControlWorker(QThread):
             self._robot = RealRobot(self.config.robot)
             self._suction = RealSuctionController(self.config.suction)
             self.log_message.emit(f"标定矩阵条件数：{ibvs.condition_number:.3f}")
-            # 先构造控制器并校验预对准参数；配置错误时不建立机械臂连接、更不会运动。
+            # 先构造直接 IBVS 控制器；配置错误时不建立机械臂连接、更不会运动。
             self._controller = SuctionRobotController(
                 self.config,
                 self.camera,
@@ -112,7 +112,7 @@ class ControlWorker(QThread):
                 suction_ref,
                 session,
             )
-            self.log_message.emit("预对准参数校验通过，正在连接ADP吸液枪……")
+            self.log_message.emit("直接 IBVS 参数校验通过，正在连接ADP吸液枪……")
             self._suction.connect()
             self.log_message.emit("ADP吸液枪串口连接成功，正在连接机械臂……")
             self._robot.connect()

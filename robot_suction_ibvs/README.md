@@ -1,6 +1,6 @@
 # Eye-in-Hand 视觉伺服小目标自动吸取系统
 
-本工程实现固定观察高度的小目标自动吸取流程：HSV 黑色目标分割、像素尺寸筛选、单目标最近邻锁定、可见区二维 IBVS 预对准、受限终末 XY 移动、Z 轴下降、ADP 定量吸液、抬升和返回观察位。
+本工程实现固定观察高度的小目标自动吸取流程：HSV 黑色目标分割、像素尺寸筛选、单目标最近邻锁定、二维 IBVS 直接对准吸管轴线、Z 轴下降、ADP 定量吸液、抬升和返回观察位。
 
 不包含 YOLO、RGB-D、深度估计、PBVS、完整手眼标定 AX=XB、世界坐标转换或复杂多目标跟踪。
 
@@ -37,21 +37,14 @@ sudo usermod -aG dialout "$USER"
 
 在 `GLOBAL_DETECT` 状态，图像经 HSV 阈值分割、开闭运算和轮廓提取。每个轮廓计算质心 `[u,v]`、面积、旋转矩形宽高和 `size_px = max(width_px, height_px)`。仅 `size_px < vision.size_threshold_px` 的对象能被选作吸取目标。
 
-进入 `ALIGN_IBVS` 后，不再重新做尺寸筛选或重新选择对象；只在当前帧中关联距上一帧锁定目标最近的轮廓。IBVS 将目标对准到吸管遮挡区外的预对准点：
+进入 `ALIGN_IBVS` 后，不再重新做尺寸筛选或重新选择对象；只在当前帧中关联距上一帧锁定目标最近的轮廓。IBVS 直接将目标中心对准吸管轴线参考点：
 
 ```text
-prealign_ref = suction_ref + prealign_offset_px
-e_px = [u-u_prealign, v-v_prealign]^T
+e_px = [u-u_ref, v-v_ref]^T
 v_xy_mm_s = -gain * inv(A_px_per_mm) * e_px
 ```
 
-其中 `A_px_per_mm` 在固定观察高度标定。目标在预对准点连续满足 `pixel_tolerance` 与 `stable_frames` 后，系统用最后一帧计算一次终末位置移动：
-
-```text
-final_dXY_mm = inv(A_px_per_mm) * (suction_ref - current_pixel)
-```
-
-该位移必须小于 `final_approach_max_mm`，并由机械臂相对位置接口执行。运动途中即使吸管遮住目标也不再依赖视觉；规划运动完成后 XY 保持停止，只执行教示的 Z 轴下降和吸取动作。目标在预对准阶段丢失仍会进入安全恢复，不会被当成对准成功。
+其中 `A_px_per_mm` 在固定观察高度标定，`suction_ref` 是吸管轴线正对目标且目标仍可见时采集的目标中心。目标连续满足 `pixel_tolerance` 与 `stable_frames` 后，系统停止 XY 并直接执行教示的 Z 轴下降和吸取动作。
 
 ## 标定与现场调试
 
@@ -75,14 +68,14 @@ final_dXY_mm = inv(A_px_per_mm) * (suction_ref - current_pixel)
    python calibration/calibrate_servo_xy.py --config config.yaml --frames 10
    ```
 
-4. 运行双位置图像标定，同时生成吸管参考点和预对准偏移：
+4. 将吸管轴线正对一个仍可见的静止目标，运行单点标定并按 `A` 保存吸管参考像素：
 
    ```bash
-   python calibration/calibrate_prealign.py --config config.yaml --frames 20
+   python calibration/calibrate_suction_ref.py --config config.yaml --frames 20
    ```
 
    `calibrate_servo_xy.py` 运行期间画面中必须始终只有一个尺寸合格且静止的目标；
-   工具会检查采样抖动、机械臂微移后回位误差、拟合秩、条件数与拟合 RMS，不合格时不会保存矩阵。
+   工具会检查采样抖动、拟合秩、条件数与拟合 RMS，不合格时不会保存矩阵。
    每次运动指令完成后，脚本先等待机械臂报告停止；随后默认用 1 秒持续读取并丢弃振动、
    相机缓存和自动曝光过渡帧，最后才在最长 10 秒内寻找连续稳定的 10 帧窗口并计算中心。
    曝光或结构稳定较慢时可增加：
@@ -105,26 +98,7 @@ final_dXY_mm = inv(A_px_per_mm) * (suction_ref - current_pixel)
    python calibration/calibrate_servo_xy.py --config config.yaml --step-mm 2 --repeats 2
    ```
 
-   预对准标定画面中也只保留同一个尺寸合格目标：吸管对准目标且目标中心可检测时保持静止，
-   等待采满连续帧后按 `A`；然后保持 Z、姿态和目标不变，只移动 XY 到目标完全无遮挡的
-   预对准位置，再次等待采满连续帧后按 `P`。
-
-   脚本直接计算：
-
-   ```text
-   prealign_offset_px = 预对准目标中心 - 对准目标中心
-   运行时终末XY       = inv(servo_A) @ (-prealign_offset_px)
-   ```
-
-   两处采样都通过稳定性、矩阵和安全距离检查后，脚本将对准位目标中心保存为
-   `data/suction_ref.npy`，并输出预对准偏移和终末 XY。确认预对准位置目标完整可见后，可以显式写入配置：
-
-   ```bash
-   python calibration/calibrate_prealign.py --config config.yaml --frames 20 \
-     --apply-config --confirm-target-visible
-   ```
-
-   工具不会连接或移动机械臂，只读取相机。两次采样必须保持相机分辨率、Z、姿态和目标位置不变。如果对准时吸管遮挡目标，可以按你的方法拆下吸管完成两处采样，但拆装不能改变相机位置或末端姿态；配置应用后还必须重新装好吸管，确认预对准位置确实无遮挡。
+   吸管参考点标定工具不会连接或移动机械臂，只读取相机。吸管轴线已正对目标、目标中心可见且稳定时按 `A`；它会将单次稳定采样的中心保存为 `data/suction_ref.npy`。
 
 真实启动要求以下两个数组及其同名 `.json` 标定上下文存在且格式正确；缺少时程序会在运动前拒绝启动：
 
@@ -163,8 +137,6 @@ ADP 协议注意事项：
 
 首次接入时，`robot.observe_pose_confirmed` 和 `robot.z_motion_confirmed` 默认为 `false`。只有在示教器中核对观察位及全部 Z 高度后才可改为 `true`；否则适配器会拒绝相关运动。
 
-`ibvs.prealign_offset_confirmed` 同样默认为 `false`。运行预对准标定并确认目标在预对准点完整可见后，使用 `--apply-config --confirm-target-visible` 写入偏移并打开该开关。
-
-所有运动命令由 `control/safety.py` 统一限制，覆盖最大 XY 行程、终末 XY 单次上限、相机断流、对准超时、连续误差增长与安全停止。首次真实运行请先把 `pick_z_mm` 设置在不会接触目标的测试高度，验证预对准和终末 XY 方向后，再逐步降低到真实吸取高度，并保留硬件急停。
+所有运动命令由 `control/safety.py` 统一限制，覆盖最大 XY 行程、相机断流、对准超时、连续误差增长与安全停止。首次真实运行请先把 `pick_z_mm` 设置在不会接触目标的测试高度，验证直接 IBVS 方向后，再逐步降低到真实吸取高度，并保留硬件急停。
 
 详细的文件职责请参阅 [FILES.md](FILES.md)。

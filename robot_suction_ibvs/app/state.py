@@ -9,7 +9,6 @@ class SystemState(Enum):
     GLOBAL_DETECT = auto()
     SELECT_TARGET = auto()
     ALIGN_IBVS = auto()
-    FINAL_XY_APPROACH = auto()
     DESCEND = auto()
     SUCTION = auto()
     LIFT = auto()

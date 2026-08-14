@@ -61,9 +61,9 @@ class SafetyManager:
     ) -> None:
         """执行一次受限的相对 XY 规划运动。
 
-        ``max_increment_mm`` 可为终末盲移设置比全局 XY 行程更严格的单次上限。
-        如果当前处于一次 IBVS 对准中，该位移还会计入本轮累计指令行程，避免
-        “视觉移动 + 终末移动”的合计距离绕过 ``max_xy_travel_mm``。
+        ``max_increment_mm`` 可为特殊的单次相对移动设置更严格的上限。
+        如果当前处于一次 IBVS 对准中，该位移会计入本轮累计指令行程，避免
+        多次视觉移动的合计距离绕过 ``max_xy_travel_mm``。
         """
         increment = np.array([dx_mm, dy_mm], dtype=np.float64)
         if not np.all(np.isfinite(increment)):
@@ -81,7 +81,7 @@ class SafetyManager:
         self.stop_xy()
         combined_travel = self._cumulative_travel_mm + increment_norm
         if self._align_started_at is not None and combined_travel > self.config.max_xy_travel_mm:
-            raise SafetyViolation("Visual alignment plus final XY approach exceeds configured travel limit")
+            raise SafetyViolation("Visual alignment exceeds configured travel limit")
         self.robot.move_xy_relative(dx_mm, dy_mm)
         self.robot.wait_until_stop()
         if self._align_started_at is not None:
