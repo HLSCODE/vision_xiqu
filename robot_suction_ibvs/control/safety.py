@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+from typing import Sequence
 
 import numpy as np
 
@@ -44,6 +45,12 @@ class SafetyManager:
 
     def move_to_observe_pose(self) -> None:
         self.robot.move_to_observe_pose()
+        self.robot.wait_until_stop()
+
+    def move_pose_linear(self, pose: Sequence[float]) -> None:
+        """以受控笛卡尔直线到达已确认的绝对位姿。"""
+        self.stop_xy()
+        self.robot.move_pose_linear(pose)
         self.robot.wait_until_stop()
 
     def move_xy_relative(

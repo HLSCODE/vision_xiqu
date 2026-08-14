@@ -118,6 +118,8 @@ def return_to_observe_pose_and_sample(
     detector: HSVObjectDetector,
     reference_center: np.ndarray,
     reference_pose: np.ndarray,
+    observe_pose: np.ndarray,
+    return_motion: str,
     frames: int,
     max_jitter_px: float,
     sample_timeout_s: float,
@@ -128,7 +130,12 @@ def return_to_observe_pose_and_sample(
     """Return to the confirmed pose and compare every retry with the fixed first centre."""
     last_message = "no return sample was collected"
     for attempt in range(1, attempts + 1):
-        safety.move_to_observe_pose()
+        if return_motion == "joint":
+            safety.move_to_observe_pose()
+        elif return_motion == "linear":
+            safety.move_pose_linear(observe_pose)
+        else:
+            raise ValueError(f"Unsupported observe-pose return motion: {return_motion!r}")
         returned_pose = read_robot_pose(robot, "Returned observation-pose feedback")
         label = f"Returned observation pose [{attempt}/{attempts}]"
         wait_for_settle(camera, settle_time_s, label)
@@ -203,6 +210,12 @@ def main() -> int:
         default=2,
         help="Number of identical absolute observe_pose commands allowed to recover the reference centre",
     )
+    parser.add_argument(
+        "--observe-return-motion",
+        choices=("joint", "linear"),
+        default="joint",
+        help="Use joint planning (current behavior) or absolute Cartesian MoveL for each observe_pose return",
+    )
     parser.add_argument("--max-fit-rms-px", type=float, default=2.0)
     parser.add_argument("--output", default=None, help="Defaults to ibvs.servo_A_path in config")
     args = parser.parse_args()
@@ -252,7 +265,8 @@ def main() -> int:
         robot_offsets: list[np.ndarray] = []
         pixel_deltas: list[np.ndarray] = []
         print(
-            "Confirmed absolute observe_pose used for every return: "
+            "Confirmed absolute observe_pose used for every return "
+            f"({args.observe_return_motion} planning): "
             f"{np.asarray(config.robot.observe_pose, dtype=np.float64).round(6).tolist()}"
         )
         print(
@@ -284,7 +298,10 @@ def main() -> int:
                 # 若移动或图像采样异常，仍立即回到已确认的安全观察位。
                 # 正常路径的绝对回位与图像检查统一由下方函数执行，避免重复下发。
                 if not shifted_sample_complete:
-                    safety.move_to_observe_pose()
+                    if args.observe_return_motion == "linear":
+                        safety.move_pose_linear(config.robot.observe_pose)
+                    else:
+                        safety.move_to_observe_pose()
             actual_offset_xy = shifted_robot_pose[:2] - sample_origin_pose[:2]
             if float(np.linalg.norm(actual_offset_xy)) <= 1e-6:
                 raise RuntimeError(
@@ -299,6 +316,8 @@ def main() -> int:
                     detector,
                     reference_center,
                     reference_robot_pose,
+                    np.asarray(config.robot.observe_pose, dtype=np.float64),
+                    args.observe_return_motion,
                     args.frames,
                     args.max_jitter_px,
                     args.sample_timeout_s,

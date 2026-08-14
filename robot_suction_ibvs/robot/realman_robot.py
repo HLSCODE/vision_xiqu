@@ -187,6 +187,14 @@ class RealRobot(RobotInterface):
             "移动到目标位姿",
         )
 
+    def move_pose_linear(self, pose: Sequence[float]) -> None:
+        """以笛卡尔直线规划移动到工程坐标绝对位姿。"""
+        self._move_linear(
+            pose,
+            int(self.config.linear_speed_percent),
+            "直线移动到目标位姿",
+        )
+
     def move_xy_relative(self, dx_mm: float, dy_mm: float) -> None:
         """保持 Z 和姿态不变，在当前工作坐标系执行相对 XY 直线运动。"""
         self._validate_finite(dx_mm, dy_mm)

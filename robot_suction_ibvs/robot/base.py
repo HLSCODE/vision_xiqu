@@ -22,6 +22,9 @@ class RobotInterface(ABC):
     def move_pose(self, pose: Sequence[float]) -> None: ...
 
     @abstractmethod
+    def move_pose_linear(self, pose: Sequence[float]) -> None: ...
+
+    @abstractmethod
     def move_xy_relative(self, dx_mm: float, dy_mm: float) -> None: ...
 
     @abstractmethod
