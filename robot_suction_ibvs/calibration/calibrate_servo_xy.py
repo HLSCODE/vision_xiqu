@@ -9,7 +9,7 @@ For each of X-, X+, Y- and Y+, this script performs two independent trials:
 
 The return image is printed for the operator to inspect. It is deliberately not
 used to alter the next trial or to compensate a movement. The matrix is fitted
-only from the eight known commanded XY increments and their image-centre shifts.
+from the eight measured robot XY displacements and their image-centre shifts.
 """
 
 from __future__ import annotations
@@ -96,16 +96,24 @@ def sample_stable_center(
     )
 
 
-def fit_matrix(command_offsets_mm: np.ndarray, pixel_offsets_px: np.ndarray) -> tuple[np.ndarray, int, float, float]:
-    """Fit [du,dv]^T = A @ [dX,dY]^T from the eight finite-difference samples."""
-    commands = np.asarray(command_offsets_mm, dtype=np.float64)
-    pixels = np.asarray(pixel_offsets_px, dtype=np.float64)
-    if commands.shape != pixels.shape or commands.ndim != 2 or commands.shape[1] != 2:
-        raise ValueError("Command and pixel samples must both have shape (N, 2)")
+def read_robot_pose(robot: RealRobot, label: str) -> np.ndarray:
+    """Read one valid Cartesian feedback pose in mm/rad."""
+    pose = np.asarray(robot.get_current_pose(), dtype=np.float64)
+    if pose.shape != (6,) or not np.all(np.isfinite(pose)):
+        raise RuntimeError(f"{label}: robot returned an invalid Cartesian pose: {pose!r}")
+    return pose
 
-    coefficients, _, rank, _ = np.linalg.lstsq(commands, pixels, rcond=None)
+
+def fit_matrix(robot_offsets_mm: np.ndarray, pixel_offsets_px: np.ndarray) -> tuple[np.ndarray, int, float, float]:
+    """Fit [du,dv]^T = A @ [dX,dY]^T from the eight finite-difference samples."""
+    offsets = np.asarray(robot_offsets_mm, dtype=np.float64)
+    pixels = np.asarray(pixel_offsets_px, dtype=np.float64)
+    if offsets.shape != pixels.shape or offsets.ndim != 2 or offsets.shape[1] != 2:
+        raise ValueError("Robot and pixel samples must both have shape (N, 2)")
+
+    coefficients, _, rank, _ = np.linalg.lstsq(offsets, pixels, rcond=None)
     matrix = coefficients.T
-    residuals = commands @ coefficients - pixels
+    residuals = offsets @ coefficients - pixels
     rms_px = float(np.sqrt(np.mean(np.sum(residuals * residuals, axis=1))))
     condition = float(np.linalg.cond(matrix))
     return matrix, int(rank), condition, rms_px
@@ -147,7 +155,7 @@ def main() -> int:
         ("Y-", 0.0, -args.step_mm),
         ("Y+", 0.0, args.step_mm),
     )
-    command_samples: list[np.ndarray] = []
+    robot_offset_samples: list[np.ndarray] = []
     pixel_samples: list[np.ndarray] = []
 
     camera.open()
@@ -176,6 +184,7 @@ def main() -> int:
                     args.sample_timeout_s,
                     f"{label} reference",
                 )
+                reference_pose = read_robot_pose(robot, f"{label} reference feedback")
 
                 try:
                     safety.move_xy_relative(dx_mm, dy_mm)
@@ -188,6 +197,7 @@ def main() -> int:
                         args.sample_timeout_s,
                         f"{label} moved",
                     )
+                    moved_pose = read_robot_pose(robot, f"{label} moved feedback")
                 finally:
                     # Always issue the configured absolute observation pose after a jog.
                     safety.move_to_observe_pose()
@@ -203,18 +213,22 @@ def main() -> int:
                 )
 
                 pixel_delta = moved - reference
+                feedback_delta = moved_pose[:2] - reference_pose[:2]
+                if float(np.linalg.norm(feedback_delta)) <= 1e-6:
+                    raise RuntimeError(f"{label}: robot feedback reported no XY displacement")
                 return_delta = returned - reference
-                command_samples.append(np.array([dx_mm, dy_mm], dtype=np.float64))
+                robot_offset_samples.append(feedback_delta)
                 pixel_samples.append(pixel_delta)
                 print(
                     f"{label}: command dXY=[{dx_mm:+.3f}, {dy_mm:+.3f}]mm -> "
+                    f"feedback dXY={feedback_delta.round(4).tolist()}mm -> "
                     f"dUV={pixel_delta.round(3).tolist()}px; "
                     f"return dUV={return_delta.round(3).tolist()}px"
                 )
 
-        commands = np.stack(command_samples)
+        robot_offsets = np.stack(robot_offset_samples)
         pixels = np.stack(pixel_samples)
-        matrix, rank, condition, fit_rms_px = fit_matrix(commands, pixels)
+        matrix, rank, condition, fit_rms_px = fit_matrix(robot_offsets, pixels)
         print("A (px/mm) =\n", matrix)
         print(f"rank={rank}, condition={condition:.3f}, fit_rms={fit_rms_px:.3f}px")
 

@@ -98,8 +98,8 @@ final_dXY_mm = inv(A_px_per_mm) * (suction_ref - current_pixel)
    `calibrate_servo_xy.py` 是一个独立的八次有限差分标定：`X-`、`X+`、`Y-`、`Y+` 四个方向各移动
    两次。每一次试验都严格执行：固定 `config.robot.observe_pose` → 等待稳定并采样中心 → 相对移动
    `±2 mm` → 等待稳定并采样中心 → 回到同一个固定观察位 → 等待稳定并再次采样中心。
-   最后的回位中心只输出日志，便于人工核对，不参与补偿、重试或拟合；矩阵只由八组“指令 XY 位移”
-   与“移动前后图像中心位移”拟合。可按需要调整步长或重复次数：
+   最后的回位中心只输出日志，便于人工核对，不参与补偿或重试；矩阵只由八组“移动前后机械臂实际
+   XY 反馈位移”与“移动前后图像中心位移”拟合。可按需要调整步长或重复次数：
 
    ```bash
    python calibration/calibrate_servo_xy.py --config config.yaml --step-mm 2 --repeats 2
