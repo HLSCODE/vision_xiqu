@@ -61,6 +61,11 @@ ibvs:
   slowdown_error_px: 10.0
   # 相邻控制周期允许的 XY 合速度变化率上限，单位 mm/s²，用于抑制速度突变。
   max_acceleration_mm_s2: 20.0
+  # 在线控制采用位置式 IBVS：先由像素误差算出等效 XY 速度，再乘此时间窗得到一次相对 XY 微移。
+  # 它与 servo_A 标定时使用的 rm_movel 路径一致，避免 CANFD 速度透传未实际执行时出现空循环。
+  position_step_horizon_s: 1.0
+  # 单次位置式 IBVS 微移的最大合位移，单位 mm；首次实机建议保持 0.3~0.5 mm。
+  max_position_step_mm: 0.5
   # 固定观察高度下标定的像素/毫米二维映射矩阵；同时要求存在同名 .json 元数据文件。
   servo_A_path: data/servo_A.npy
 
@@ -141,3 +146,5 @@ system:
   save_csv: true
   # GUI后台状态机目标循环频率，单位 Hz；实际频率还受相机和SDK响应时间影响。
   loop_hz: 30.0
+  # 同一轮任务连续恢复的最大次数。达到后进入 ERROR，防止目标/标定异常时无限循环运动。
+  max_recovery_attempts: 3

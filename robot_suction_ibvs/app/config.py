@@ -48,6 +48,8 @@ class IBVSConfig:
     error_growth_frames: int
     slowdown_error_px: float
     max_acceleration_mm_s2: float
+    position_step_horizon_s: float
+    max_position_step_mm: float
     servo_A_path: str
 
 
@@ -97,6 +99,7 @@ class SafetyConfig:
 class SystemConfig:
     save_csv: bool
     loop_hz: float
+    max_recovery_attempts: int
 
 
 @dataclass(frozen=True)
@@ -168,6 +171,10 @@ def _validate(config: AppConfig) -> None:
     if not math.isfinite(config.ibvs.slowdown_error_px) or config.ibvs.slowdown_error_px < 0:
         raise ValueError("ibvs.slowdown_error_px must be non-negative and finite")
     _require_positive("ibvs.max_acceleration_mm_s2", config.ibvs.max_acceleration_mm_s2)
+    _require_positive("ibvs.position_step_horizon_s", config.ibvs.position_step_horizon_s)
+    _require_positive("ibvs.max_position_step_mm", config.ibvs.max_position_step_mm)
+    if config.ibvs.max_position_step_mm > config.safety.max_xy_travel_mm:
+        raise ValueError("ibvs.max_position_step_mm must not exceed safety.max_xy_travel_mm")
     if len(config.robot.observe_pose) != 6 or not all(math.isfinite(value) for value in config.robot.observe_pose):
         raise ValueError("robot.observe_pose must contain six finite values")
     if not str(config.robot.ip).strip():
@@ -218,6 +225,7 @@ def _validate(config: AppConfig) -> None:
     _require_positive("safety.max_xy_travel_mm", config.safety.max_xy_travel_mm)
     _require_positive_int("safety.camera_failure_limit", config.safety.camera_failure_limit)
     _require_positive("system.loop_hz", config.system.loop_hz)
+    _require_positive_int("system.max_recovery_attempts", config.system.max_recovery_attempts)
 
 
 def load_config(path: str | Path) -> AppConfig:

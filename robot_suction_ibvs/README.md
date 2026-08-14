@@ -42,9 +42,10 @@ sudo usermod -aG dialout "$USER"
 ```text
 e_px = [u-u_ref, v-v_ref]^T
 v_xy_mm_s = -gain * inv(A_px_per_mm) * e_px
+dXY_mm = clamp(v_xy_mm_s * position_step_horizon_s, max_position_step_mm)
 ```
 
-其中 `A_px_per_mm` 在固定观察高度标定，`suction_ref` 是吸管轴线正对目标且目标仍可见时采集的目标中心。目标连续满足 `pixel_tolerance` 与 `stable_frames` 后，系统停止 XY 并直接执行教示的 Z 轴下降和吸取动作。
+其中 `A_px_per_mm` 在固定观察高度标定，`suction_ref` 是吸管轴线正对目标且目标仍可见时采集的目标中心。在线控制采用连续的短距离 `rm_movel` 相对 XY 微移；这与标定时的移动接口一致。目标连续满足 `pixel_tolerance` 与 `stable_frames` 后，系统停止 XY 并直接执行教示的 Z 轴下降和吸取动作。
 
 ## 标定与现场调试
 
@@ -118,11 +119,13 @@ python gui.py
 
 桌面界面使用 PyQt6 编写，会自动连接 OpenCV 相机并显示实时画面。检测到的目标会显示轮廓、编号和原始采集图像坐标 `(u,v)`，不绘制中心十字：绿色表示尺寸符合吸取阈值，橙色表示目标超过尺寸阈值。即使界面预览经过压缩，标签中的坐标仍属于控制器和标定使用的原图。确认相机画面、机械臂安全区域和吸液枪状态后，点击“开始识别吸取”运行完整状态机。
 
+若对准因目标丢失、超时或安全行程限制失败，系统最多按 `system.max_recovery_attempts` 回观察位重试；超过次数会停止并进入 `ERROR`，不会无限循环。
+
 ## 接入真实硬件
 
 机械臂适配器使用睿尔曼官方 Python API2；吸液枪使用附件提供的 ADP ASCII/CRC 串口协议：
 
-- `robot/realman_robot.py`：连接 `config.yaml` 中的控制器 IP，完成点位、XY 速度透传、相对 XY、Z 运动和停止；工程单位为 mm / mm/s，适配层转换为 SDK 的 m / m/s。
+- `robot/realman_robot.py`：连接 `config.yaml` 中的控制器 IP，完成点位、相对 XY、可选 XY 速度透传、Z 运动和停止；工程单位为 mm / mm/s，适配层转换为 SDK 的 m / m/s。
 - `camera/opencv_camera.py`：通过 OpenCV 读取 USB 相机、视频文件或 RTSP 视频流。
 - `suction/adp_suction.py`：连接配置串口，可选发送 `G` 初始化和 `4` 吸液速度命令，每次吸取发送一次 `n + 体积` 命令。
 

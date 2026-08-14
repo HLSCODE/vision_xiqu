@@ -47,7 +47,7 @@ class SuctionRobotController:
         detector: HSV 轮廓检测器。
         safety: 机器人动作的唯一安全入口。
         suction: 吸取执行器适配器；当前真实实现为 ADP 定量吸液枪。
-        ibvs: 将像素误差转换为 XY 速度的控制器。
+        ibvs: 将像素误差转换为 XY 等效速度和位置微移的控制器。
         suction_ref_px: 吸管轴线正对目标时，目标中心在图像中的参考像素 ``[u*, v*]``。
         session: 文本日志与可选 CSV 记录器。
     """
@@ -96,6 +96,8 @@ class SuctionRobotController:
         # 全局观察必须连续多帧为空才结束任务，避免一次曝光波动或轮廓漏检提前完成。
         self._empty_scene_frames = 0
         self._previous_error_norm: float | None = None
+        # 同一轮未成功吸取的恢复次数；达到配置上限后停止，避免异常目标无限重试。
+        self._recovery_attempts = 0
         self._last_control_time = time.monotonic()
         self._suction_started_at: float | None = None
         self.pick_count = 0
@@ -114,7 +116,7 @@ class SuctionRobotController:
         """执行当前状态的一次处理；本函数不负责无限循环。
 
         每次调用最多完成一个离散状态动作或一次图像闭环控制。将状态函数拆开，
-        可保证下降、吸取与恢复动作不会和持续 IBVS XY 速度混在同一个代码分支中。
+        可保证下降、吸取与恢复动作不会和迭代 IBVS XY 微移混在同一个代码分支中。
         """
         try:
             # 每个状态有独立处理函数，避免把检测、对准和吸取堆在一个 while 循环中。
@@ -277,7 +279,7 @@ class SuctionRobotController:
         self.target = association.target
         self.last_center_px = self.target.center.copy()
         now = time.monotonic()
-        # compute() 输出单位为 mm/s；dt 用于其中的加速度/速度变化率限制。
+        # compute() 输出等效速度，dt 用于其中的加速度/速度变化率限制。
         command = self.ibvs.compute(self.target.center, self.suction_ref_px, now - self._last_control_time)
         self._last_control_time = now
         if self._previous_error_norm is not None and command.error_norm_px > self._previous_error_norm + 0.5:
@@ -295,7 +297,19 @@ class SuctionRobotController:
             self._stable_frames += 1
         else:
             self._stable_frames = 0
-        self.safety.set_xy_velocity(command.velocity_mm_s)
+        # servo_A 是用 rm_movel 的相对 XY 微移标定的。在线同样使用短距离 rm_movel：
+        # dXY = v_xy * horizon，并限制单次长度。这样每一步都由机械臂规划器完成，
+        # 避免 CANFD 速度透传虽然返回成功、但控制器没有实际执行时的空循环。
+        step_xy_mm = command.velocity_mm_s * self.config.ibvs.position_step_horizon_s
+        step_norm_mm = float(np.linalg.norm(step_xy_mm))
+        if step_norm_mm > self.config.ibvs.max_position_step_mm:
+            step_xy_mm *= self.config.ibvs.max_position_step_mm / step_norm_mm
+        if command.error_norm_px <= self.config.ibvs.pixel_tolerance:
+            # 已进入容差时不发送零长度规划运动；只停止上一轮可能残留的动作。
+            self.safety.stop_xy()
+            step_xy_mm[:] = 0.0
+        elif float(np.linalg.norm(step_xy_mm)) > 1e-5:
+            self.safety.move_xy_relative(float(step_xy_mm[0]), float(step_xy_mm[1]))
         # CSV 用于事后分析误差收敛、速度饱和与目标关联距离。
         self.session.record(
             state=self.state.name, u=self.target.center[0], v=self.target.center[1],
@@ -353,6 +367,7 @@ class SuctionRobotController:
         self.suction.off()
         # 只有抬升和结束本轮吸取状态都完成后才计为一次完整吸取，失败的中途动作不计数。
         self.pick_count += 1
+        self._recovery_attempts = 0
         self.transition(SystemState.RETURN_OBSERVE, f"object lifted; picks={self.pick_count}")
 
     def _handle_return_observe(self) -> None:
@@ -370,6 +385,16 @@ class SuctionRobotController:
         ``ERROR`` 则终止本次任务并等待人工处理。
         """
         # 目标丢失、超时或安全异常：停止、结束吸取状态、回观察位，再重新做全局检测。
+        # 但对同一轮连续失败必须设置次数上限，不能让机械臂无限重复尝试。
+        self._recovery_attempts += 1
+        if self._recovery_attempts >= self.config.system.max_recovery_attempts:
+            self.safety.stop_all()
+            self.suction.off()
+            self.transition(
+                SystemState.ERROR,
+                f"recovery limit reached ({self._recovery_attempts}/{self.config.system.max_recovery_attempts})",
+            )
+            return
         self.safety.stop_all()
         self.suction.off()
         self.target = None

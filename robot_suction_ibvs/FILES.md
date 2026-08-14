@@ -36,7 +36,7 @@
 | `vision/models.py` | 检测目标、检测结果和跟踪结果的数据结构。 |
 | `vision/tracker.py` | 对锁定目标做最近邻关联，不切换为其他目标。 |
 | `vision/visualization.py` | 为 PyQt 相机预览绘制目标轮廓、编号和换算后的原图 `(u,v)` 坐标。 |
-| `control/ibvs.py` | 根据标定矩阵计算二维 XY 视觉伺服速度。 |
+| `control/ibvs.py` | 根据标定矩阵计算二维 XY 视觉伺服等效速度，控制器再转换为安全的相对位置微移。 |
 | `control/safety.py` | 所有机器人运动的安全网关：限制总行程与单次相对位移、断流、停止及 Z 轴动作。 |
 
 ## 硬件适配
@@ -45,7 +45,7 @@
 | --- | --- |
 | `camera/opencv_camera.py` | USB、视频文件或 RTSP 的 OpenCV 相机实现。 |
 | `robot/base.py` | 机械臂统一接口。 |
-| `robot/realman_robot.py` | 睿尔曼 API2 连接、位姿换算、规划运动、XY 速度透传和停止控制。 |
+| `robot/realman_robot.py` | 睿尔曼 API2 连接、位姿换算、规划运动、相对 XY、可选 XY 速度透传和停止控制。 |
 | `suction/base.py` | 吸取执行器统一接口。 |
 | `suction/adp_suction.py` | ADP 串口连接、CRC 帧、初始化、吸液速度和定量吸液命令实现。 |
 
