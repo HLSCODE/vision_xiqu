@@ -9,12 +9,12 @@ camera:
   # 请求采集帧率，单位 FPS；实际帧率受相机、USB 带宽和曝光时间影响。
   fps: 30
   # OpenCV 视频源。Ubuntu 可填写 /dev/video6，也可填写整数索引（如 0）。
-  device_id: "/dev/video18"
+  device_id: "/dev/video12"
   video_path: null
   # 是否在控制器的原始图像检测前使用相机内参进行畸变校正。
   enable_undistort: false
   # 相机内参文件路径，应包含 camera_matrix 和 dist_coeffs；相对路径以项目根目录为准。
-  intrinsic_path: data/camera_intrinsic.npz
+  intrinsic_path: data/camera_intrinsic.npy
 
 vision:
   # OpenCV HSV 下限 [H,S,V]。OpenCV 的 H 范围是 0~179，S/V 范围是 0~255。
@@ -22,15 +22,15 @@ vision:
   hsv_lower: [0, 0, 0]
   # HSV 上限 [H,S,V]。V=80 越大越容易检出浅黑目标，也越容易把阴影识别为目标；
   # 阴影误检时可将 V 调低到 50~70，黑色目标漏检时可适当调高。
-  hsv_upper: [179, 255, 80]
+  hsv_upper: [179, 255, 120]
   # 轮廓最小面积，单位为原始图像 px²；小于该面积的轮廓视为噪声并丢弃。
-  min_area_px: 500.0
+  min_area_px: 300.0
   # HSV 掩膜开运算/闭运算的椭圆核尺寸，单位 px；建议使用正奇数，越大去噪越强，
   # 但也可能抹掉小目标或把相邻目标连接起来。
   morphology_kernel: 3
   # 可吸目标最大像素尺寸，单位为原始图像 px。尺寸定义为最小外接旋转矩形的
   # max(width, height)，只有 size_px < 该值的目标才允许在全局检测阶段被选择。
-  size_threshold_px: 2000.0
+  size_threshold_px: 400.0
 
 tracking:
   # IBVS期间相邻帧目标中心允许的最大匹配距离，单位为原始图像 px。
@@ -73,7 +73,7 @@ robot:
   api_timeout_ms: 1000
   # 固定高位观察位：[x_mm,y_mm,z_mm,rx_rad,ry_rad,rz_rad]。
   # 当前值是占位值，必须用示教器移动到安全观察位后读取并替换。
-  observe_pose: [-300.164, -377.463, -338.215, 3.048000, 0.041000, 0.245000]
+  observe_pose: [-300.155, -377.469, -186.180, 3.047000, 0.041000, 0.245000]
   # 观察位安全确认开关。false时适配器拒绝移动到观察位；实际示教核对后才能改为true。
   observe_pose_confirmed: true
   # 移动到观察位或通用位姿时的规划速度百分比，范围1~100，不是mm/s。
@@ -86,11 +86,11 @@ robot:
   # 非阻塞MOVEJ_P/MOVEL规划运动的最长等待时间，单位 s；超时后执行停止。
   motion_timeout_s: 30.0
   # 固定观察高度，单位 mm。相对Z模式用它计算下降量，应与observe_pose中的z一致。
-  observe_z_mm: -338.215
+  observe_z_mm: -186.180
   # 吸取高度，单位 mm。absolute模式表示绝对Z；relative模式下与observe_z_mm做差得到下降量。
-  pick_z_mm: 35.0
+  pick_z_mm:  -187.180
   # 吸取后的安全抬升高度，单位 mm。absolute模式表示绝对Z；relative模式用于计算抬升量。
-  safe_z_mm: 150.0
+  safe_z_mm:  -186.180
   # Z参数安全确认开关。false时适配器拒绝所有Z运动；实测三个高度并核对后才能改为true。
   z_motion_confirmed: false
   # Z运动模式：absolute=使用工作坐标系绝对Z；relative=按观察/吸取/安全高度之差相对移动。
@@ -109,7 +109,7 @@ suction:
   # 并且必须与servo_A使用相同分辨率、内参、观察高度、末端姿态和工作坐标系。
   suction_ref_path: data/suction_ref.npy
   # Ubuntu下ADP吸液枪的串口设备；部署前用 ls -l /dev/ttyUSB* 确认实际编号和权限。
-  serial_port: /dev/ttyUSB2
+  serial_port: /dev/hand
   # 附件原实现使用的串口波特率。
   baudrate: 115200
   # 单次打开、写入和读取响应的超时，单位 s。

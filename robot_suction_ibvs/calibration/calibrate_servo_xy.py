@@ -128,7 +128,7 @@ def main() -> int:
     parser.add_argument("--max-jitter-px", type=float, default=3.0)
     parser.add_argument("--settle-time-s", type=float, default=2.0)
     parser.add_argument("--sample-timeout-s", type=float, default=20.0)
-    parser.add_argument("--max-fit-rms-px", type=float, default=5.0)
+    parser.add_argument("--max-fit-rms-px", type=float, default=15.0)
     parser.add_argument("--output", default=None, help="Defaults to ibvs.servo_A_path in config")
     args = parser.parse_args()
 

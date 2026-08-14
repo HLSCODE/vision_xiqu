@@ -38,7 +38,7 @@ def centre_and_jitter(samples: deque[np.ndarray]) -> tuple[np.ndarray, float]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Capture the direct IBVS suction-axis reference pixel")
-    parser.add_argument("--config", default="config.yaml")
+    parser.add_argument("--config", default="robot_suction_ibvs/config.yaml")
     parser.add_argument("--frames", type=int, default=20)
     parser.add_argument("--max-jitter-px", type=float, default=3.0)
     args = parser.parse_args()
