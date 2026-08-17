@@ -11,7 +11,8 @@ from typing import Any
 
 CSV_FIELDS = [
     "timestamp", "state", "u", "v", "u_ref", "v_ref", "error_u", "error_v",
-    "vx", "vy", "size_px", "tracking_distance",
+    "error_norm_px", "vx", "vy", "step_dx_mm", "step_dy_mm", "step_limit_mm",
+    "raw_u", "raw_v", "stable_frames", "size_px", "tracking_distance",
 ]
 
 

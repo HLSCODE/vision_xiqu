@@ -42,10 +42,14 @@ sudo usermod -aG dialout "$USER"
 ```text
 e_px = [u-u_ref, v-v_ref]^T
 v_xy_mm_s = -gain * inv(A_px_per_mm) * e_px
-dXY_mm = clamp(v_xy_mm_s * position_step_horizon_s, max_position_step_mm)
+dXY_mm = clamp(v_xy_mm_s * position_step_horizon_s, adaptive_step_limit(e_px))
 ```
 
-其中 `A_px_per_mm` 在固定观察高度标定，`suction_ref` 是吸管轴线正对目标且目标仍可见时采集的目标中心。在线控制采用连续的短距离 `rm_movel` 相对 XY 微移；这与标定时的移动接口一致。目标连续满足 `pixel_tolerance` 与 `stable_frames` 后，系统停止 XY 并直接执行教示的 Z 轴下降和吸取动作。
+实际步长由 `far_max_step_mm`、`medium_max_step_mm`、`near_max_step_mm` 随误差区间自适应限制，并额外限制预测图像位移 `max_predicted_image_step_px`，保证单步不会跳出跟踪范围。
+
+其中 `A_px_per_mm` 在固定观察高度标定，`suction_ref` 是吸管轴线正对目标且目标仍可见时采集的目标中心。在线控制采用连续的短距离 `rm_movel` 相对 XY 微移；这与标定时的移动接口一致。每次移动后会丢弃 `post_move_settle_frames` 帧，并对 `center_filter_frames` 帧中心取中值。目标先进入 `pixel_tolerance`，随后在 `stable_exit_tolerance_px` 的防抖区间内连续满足 `stable_frames` 次后，系统停止 XY 并直接执行教示的 Z 轴下降和吸取动作。
+
+位置式 IBVS 的每一步均等待机械臂规划运动结束；因此从较远目标开始对准时，`ibvs.max_align_time_s` 应保守设为 `30 s`，不建议仍使用连续速度模式的 `15 s` 默认值。
 
 ## 标定与现场调试
 

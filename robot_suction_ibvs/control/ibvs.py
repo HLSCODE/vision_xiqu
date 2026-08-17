@@ -39,20 +39,6 @@ class IBVSController:
         """Clear velocity history before a new alignment task."""
         self._last_velocity_mm_s[:] = 0.0
 
-    def robot_displacement_for_pixel_delta(self, pixel_delta_px: np.ndarray) -> np.ndarray:
-        """把期望的目标像素位移换算为机械臂相对 XY 位移。
-
-        ``A`` 的定义是 ``目标像素变化 = A @ 机械臂位移``。因此，当目标已经
-        靠近吸管遮挡区、无法继续依赖视觉时，可以用最后一帧的目标中心计算一次
-        有界的终末位置移动。返回单位为 mm，方向位于标定时使用的工作坐标系。
-        """
-        pixel_delta = np.asarray(pixel_delta_px, dtype=np.float64)
-        if pixel_delta.shape != (2,):
-            raise ValueError("pixel_delta_px must have shape (2,)")
-        if not np.all(np.isfinite(pixel_delta)):
-            raise ValueError("pixel_delta_px contains NaN or infinity")
-        return self.A_inverse_mm_per_px @ pixel_delta
-
     def compute(self, current_pixel_px: np.ndarray, reference_pixel_px: np.ndarray, dt_s: float) -> IBVSCommand:
         """Calculate a slew-rate-limited XY command from current image centre."""
         error = np.asarray(current_pixel_px, dtype=np.float64) - np.asarray(reference_pixel_px, dtype=np.float64)

@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+from collections import deque
 import logging
 import time
 
@@ -89,6 +90,10 @@ class SuctionRobotController:
         self._candidate: DetectedObject | None = None
         # stable_frames 防止单帧偶然落入吸管轴线容差就触发下降。
         self._stable_frames = 0
+        # 每次机械臂静止后收集若干连续中心，使用中值而非单帧中心控制，抑制轮廓抖动。
+        self._center_samples: deque[np.ndarray] = deque(maxlen=config.ibvs.center_filter_frames)
+        # 规划运动结束后，主动丢弃过渡图像，随后再采样滤波窗口。
+        self._settle_frames_remaining = 0
         # lost_frames 允许短时图像漏检，超过上限后才进入 RECOVER。
         self._lost_frames = 0
         # growth_frames 用于发现误差持续扩大（例如 A 矩阵方向错误或目标关联错误）。
@@ -239,6 +244,8 @@ class SuctionRobotController:
         self._lost_frames = 0
         self._growth_frames = 0
         self._previous_error_norm = None
+        self._center_samples.clear()
+        self._settle_frames_remaining = 0
         # 记录控制周期起点，使 IBVS 的速度变化率限制使用真实 dt。
         self._last_control_time = time.monotonic()
         # 上一个目标的速度不能带入下一个目标，否则切换瞬间可能产生不必要的惯性命令。
@@ -278,9 +285,19 @@ class SuctionRobotController:
         self._lost_frames = 0
         self.target = association.target
         self.last_center_px = self.target.center.copy()
+        if self._settle_frames_remaining > 0:
+            # 该帧只用于清空相机/曝光过渡；不参与跟踪误差和控制计算。
+            self._settle_frames_remaining -= 1
+            self._center_samples.clear()
+            return
+        self._center_samples.append(self.target.center.copy())
+        if len(self._center_samples) < self.config.ibvs.center_filter_frames:
+            # 每次移动后先收集同一静止位姿的连续帧，再计算中值中心。
+            return
+        filtered_center = np.median(np.stack(self._center_samples), axis=0)
         now = time.monotonic()
         # compute() 输出等效速度，dt 用于其中的加速度/速度变化率限制。
-        command = self.ibvs.compute(self.target.center, self.suction_ref_px, now - self._last_control_time)
+        command = self.ibvs.compute(filtered_center, self.suction_ref_px, now - self._last_control_time)
         self._last_control_time = now
         if self._previous_error_norm is not None and command.error_norm_px > self._previous_error_norm + 0.5:
             # 误差连续增长通常意味着映射方向、目标关联或机械臂执行存在异常。
@@ -295,32 +312,65 @@ class SuctionRobotController:
         if command.error_norm_px <= self.config.ibvs.pixel_tolerance:
             # 必须连续多帧满足容差，避免由单帧噪声触发下降。
             self._stable_frames += 1
+        elif (
+            self._stable_frames > 0
+            and command.error_norm_px <= self.config.ibvs.stable_exit_tolerance_px
+        ):
+            # 进入稳定区后，允许误差在较小的退出容差内波动，并继续累计稳定帧，
+            # 不因为单帧检测抖动重新移动。最终对准精度受 stable_exit_tolerance_px 限制。
+            self._stable_frames += 1
         else:
             self._stable_frames = 0
         # servo_A 是用 rm_movel 的相对 XY 微移标定的。在线同样使用短距离 rm_movel：
-        # dXY = v_xy * horizon，并限制单次长度。这样每一步都由机械臂规划器完成，
-        # 避免 CANFD 速度透传虽然返回成功、但控制器没有实际执行时的空循环。
+        # dXY = v_xy * horizon；步长随像素误差分段增大，并同时限制预测图像位移。
+        # 这样远处快速接近、近处细调，且不会让相邻帧目标跳出跟踪关联范围。
         step_xy_mm = command.velocity_mm_s * self.config.ibvs.position_step_horizon_s
         step_norm_mm = float(np.linalg.norm(step_xy_mm))
-        if step_norm_mm > self.config.ibvs.max_position_step_mm:
-            step_xy_mm *= self.config.ibvs.max_position_step_mm / step_norm_mm
-        if command.error_norm_px <= self.config.ibvs.pixel_tolerance:
-            # 已进入容差时不发送零长度规划运动；只停止上一轮可能残留的动作。
+        step_limit_mm = self._step_limit_for_error(command.error_norm_px)
+        if step_norm_mm > step_limit_mm:
+            step_xy_mm *= step_limit_mm / step_norm_mm
+        predicted_pixel_shift = self.ibvs.A_px_per_mm @ step_xy_mm
+        predicted_shift_norm_px = float(np.linalg.norm(predicted_pixel_shift))
+        if predicted_shift_norm_px > self.config.ibvs.max_predicted_image_step_px:
+            step_xy_mm *= self.config.ibvs.max_predicted_image_step_px / predicted_shift_norm_px
+
+        hold_stable_position = (
+            self._stable_frames > 0
+            and command.error_norm_px <= self.config.ibvs.stable_exit_tolerance_px
+        )
+        if hold_stable_position:
+            # 已进入稳定区时不再因噪声修正；连续满足严格容差的帧数仍会继续累计。
             self.safety.stop_xy()
             step_xy_mm[:] = 0.0
         elif float(np.linalg.norm(step_xy_mm)) > 1e-5:
             self.safety.move_xy_relative(float(step_xy_mm[0]), float(step_xy_mm[1]))
+            self._center_samples.clear()
+            self._settle_frames_remaining = self.config.ibvs.post_move_settle_frames
+            # 规划运动已经阻塞完成；下一次用于滤波的时间间隔从这里重新计时。
+            self._last_control_time = time.monotonic()
         # CSV 用于事后分析误差收敛、速度饱和与目标关联距离。
         self.session.record(
-            state=self.state.name, u=self.target.center[0], v=self.target.center[1],
+            state=self.state.name, u=filtered_center[0], v=filtered_center[1],
             u_ref=self.suction_ref_px[0], v_ref=self.suction_ref_px[1],
             error_u=command.error_px[0], error_v=command.error_px[1],
+            error_norm_px=command.error_norm_px,
             vx=command.velocity_mm_s[0], vy=command.velocity_mm_s[1],
+            step_dx_mm=step_xy_mm[0], step_dy_mm=step_xy_mm[1], step_limit_mm=step_limit_mm,
+            raw_u=self.target.center[0], raw_v=self.target.center[1], stable_frames=self._stable_frames,
             size_px=self.target.size_px, tracking_distance=association.distance_px,
         )
         if self._stable_frames >= self.config.ibvs.stable_frames:
             self.safety.stop_xy()
             self.transition(SystemState.DESCEND, "direct IBVS alignment stable")
+
+    def _step_limit_for_error(self, error_norm_px: float) -> float:
+        """Return the configured XY step limit for the current image-error band."""
+        ibvs = self.config.ibvs
+        if error_norm_px > ibvs.far_error_px:
+            return ibvs.far_max_step_mm
+        if error_norm_px > ibvs.medium_error_px:
+            return ibvs.medium_max_step_mm
+        return ibvs.near_max_step_mm
 
     def _handle_descend(self) -> None:
         """XY 已对准后，按配置执行绝对或相对 Z 轴下降。"""

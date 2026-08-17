@@ -49,7 +49,16 @@ class IBVSConfig:
     slowdown_error_px: float
     max_acceleration_mm_s2: float
     position_step_horizon_s: float
-    max_position_step_mm: float
+    far_error_px: float
+    medium_error_px: float
+    near_error_px: float
+    far_max_step_mm: float
+    medium_max_step_mm: float
+    near_max_step_mm: float
+    max_predicted_image_step_px: float
+    center_filter_frames: int
+    post_move_settle_frames: int
+    stable_exit_tolerance_px: float
     servo_A_path: str
 
 
@@ -136,6 +145,11 @@ def _require_positive_int(name: str, value: int) -> None:
         raise ValueError(f"{name} must be a positive integer")
 
 
+def _require_non_negative_int(name: str, value: int) -> None:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(f"{name} must be a non-negative integer")
+
+
 def _validate(config: AppConfig) -> None:
     """Reject unsafe or internally inconsistent settings before hardware startup."""
     _require_positive_int("camera.width", config.camera.width)
@@ -172,9 +186,34 @@ def _validate(config: AppConfig) -> None:
         raise ValueError("ibvs.slowdown_error_px must be non-negative and finite")
     _require_positive("ibvs.max_acceleration_mm_s2", config.ibvs.max_acceleration_mm_s2)
     _require_positive("ibvs.position_step_horizon_s", config.ibvs.position_step_horizon_s)
-    _require_positive("ibvs.max_position_step_mm", config.ibvs.max_position_step_mm)
-    if config.ibvs.max_position_step_mm > config.safety.max_xy_travel_mm:
-        raise ValueError("ibvs.max_position_step_mm must not exceed safety.max_xy_travel_mm")
+    for name, value in (
+        ("ibvs.far_error_px", config.ibvs.far_error_px),
+        ("ibvs.medium_error_px", config.ibvs.medium_error_px),
+        ("ibvs.near_error_px", config.ibvs.near_error_px),
+        ("ibvs.far_max_step_mm", config.ibvs.far_max_step_mm),
+        ("ibvs.medium_max_step_mm", config.ibvs.medium_max_step_mm),
+        ("ibvs.near_max_step_mm", config.ibvs.near_max_step_mm),
+        ("ibvs.max_predicted_image_step_px", config.ibvs.max_predicted_image_step_px),
+        ("ibvs.stable_exit_tolerance_px", config.ibvs.stable_exit_tolerance_px),
+    ):
+        _require_positive(name, value)
+    if not (
+        config.ibvs.far_error_px > config.ibvs.medium_error_px > config.ibvs.near_error_px
+        > config.ibvs.stable_exit_tolerance_px >= config.ibvs.pixel_tolerance
+    ):
+        raise ValueError(
+            "IBVS error thresholds must satisfy far > medium > near > stable_exit >= pixel_tolerance"
+        )
+    if not (
+        config.ibvs.far_max_step_mm >= config.ibvs.medium_max_step_mm >= config.ibvs.near_max_step_mm
+    ):
+        raise ValueError("IBVS step limits must satisfy far >= medium >= near")
+    if config.ibvs.far_max_step_mm > config.safety.max_xy_travel_mm:
+        raise ValueError("ibvs.far_max_step_mm must not exceed safety.max_xy_travel_mm")
+    if config.ibvs.max_predicted_image_step_px >= config.tracking.max_distance_px:
+        raise ValueError("ibvs.max_predicted_image_step_px must be below tracking.max_distance_px")
+    _require_positive_int("ibvs.center_filter_frames", config.ibvs.center_filter_frames)
+    _require_non_negative_int("ibvs.post_move_settle_frames", config.ibvs.post_move_settle_frames)
     if len(config.robot.observe_pose) != 6 or not all(math.isfinite(value) for value in config.robot.observe_pose):
         raise ValueError("robot.observe_pose must contain six finite values")
     if not str(config.robot.ip).strip():
