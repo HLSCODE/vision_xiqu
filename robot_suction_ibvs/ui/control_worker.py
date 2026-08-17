@@ -58,13 +58,21 @@ class ControlWorker(QThread):
     control_finished = pyqtSignal(str, int)
     control_failed = pyqtSignal(str)
 
-    def __init__(self, config: AppConfig, camera: OpenCVCamera, parent=None) -> None:
+    def __init__(
+        self,
+        config: AppConfig,
+        camera: OpenCVCamera,
+        suction: RealSuctionController,
+        parent=None,
+    ) -> None:
         super().__init__(parent)
         self.config = config
         self.camera = camera
         self._controller: SuctionRobotController | None = None
         self._robot: RealRobot | None = None
-        self._suction: RealSuctionController | None = None
+        # 吸液枪由主窗口在 GUI 启动时创建、连接并一次性完成 G/速度设置；
+        # 所有后续任务复用同一个对象，on() 仅发送 n 吸液命令。
+        self._suction: RealSuctionController = suction
 
     def request_emergency_stop(self) -> None:
         """请求控制循环退出，并尽快向硬件发送停止命令。"""
@@ -75,11 +83,10 @@ class ControlWorker(QThread):
                 self._robot.stop_all()
             except Exception:
                 pass
-        if self._suction is not None:
-            try:
-                self._suction.off()
-            except Exception:
-                pass
+        try:
+            self._suction.off()
+        except Exception:
+            pass
 
     def run(self) -> None:
         session: SessionLogger | None = None
@@ -99,7 +106,6 @@ class ControlWorker(QThread):
             )
             ibvs = IBVSController(servo_A, self.config.ibvs)
             self._robot = RealRobot(self.config.robot)
-            self._suction = RealSuctionController(self.config.suction)
             self.log_message.emit(f"标定矩阵条件数：{ibvs.condition_number:.3f}")
             # 先构造直接 IBVS 控制器；配置错误时不建立机械臂连接、更不会运动。
             self._controller = SuctionRobotController(
@@ -112,9 +118,7 @@ class ControlWorker(QThread):
                 suction_ref,
                 session,
             )
-            self.log_message.emit("直接 IBVS 参数校验通过，正在连接ADP吸液枪……")
-            self._suction.connect()
-            self.log_message.emit("ADP吸液枪串口连接成功，正在连接机械臂……")
+            self.log_message.emit("直接 IBVS 参数校验通过，ADP 吸液枪已在软件启动时初始化，正在连接机械臂……")
             self._robot.connect()
             work_frame_name = self._robot.get_current_work_frame_name()
             work_frame_pose = np.asarray(self._robot.get_current_work_frame_pose(), dtype=np.float64)
@@ -161,15 +165,11 @@ class ControlWorker(QThread):
                     self._robot.stop_all()
                 except Exception:
                     pass
-            if self._suction is not None:
-                try:
-                    self._suction.off()
-                except Exception:
-                    pass
-                try:
-                    self._suction.close()
-                except Exception:
-                    pass
+            try:
+                # 任务结束只清除本轮软件吸取状态，不能关闭串口或再次发送 G。
+                self._suction.off()
+            except Exception:
+                pass
             if self._robot is not None:
                 try:
                     self._robot.disconnect()

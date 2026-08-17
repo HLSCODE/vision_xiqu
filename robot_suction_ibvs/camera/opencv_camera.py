@@ -5,11 +5,23 @@ from __future__ import annotations
 import platform
 import threading
 import time
+from dataclasses import dataclass
 
 import cv2
 import numpy as np
 
 from app.config import CameraConfig
+
+
+@dataclass(frozen=True, slots=True)
+class CameraFrame:
+    """一帧原图及其在本进程被采集到的时间信息。"""
+
+    bgr: np.ndarray
+    sequence: int
+    captured_at_monotonic: float
+
+
 class OpenCVCamera:
     """后台持续采集 OpenCV 图像，并向界面与控制器提供最新 BGR 帧。
 
@@ -25,7 +37,7 @@ class OpenCVCamera:
         self._frame_lock = threading.Lock()
         self._frame_condition = threading.Condition(self._frame_lock)
         self._consumer_state = threading.local()
-        self._latest_frame: np.ndarray | None = None
+        self._latest_frame: CameraFrame | None = None
         self._frame_sequence = 0
         self._actual_resolution = (config.width, config.height)
 
@@ -34,7 +46,10 @@ class OpenCVCamera:
         if isinstance(source, str) and source.isdigit():
             source = int(source)
         backend = cv2.CAP_ANY
-        if isinstance(source, int) and platform.system() == "Linux":
+        if platform.system() == "Linux" and (
+            isinstance(source, int)
+            or (isinstance(source, str) and source.startswith("/dev/video"))
+        ):
             backend = cv2.CAP_V4L2
         elif isinstance(source, int) and platform.system() == "Windows":
             backend = cv2.CAP_DSHOW
@@ -50,6 +65,9 @@ class OpenCVCamera:
         self._capture.set(cv2.CAP_PROP_FRAME_HEIGHT, self.config.height)
         self._capture.set(cv2.CAP_PROP_FPS, self.config.fps)
         self._capture.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc("M", "J", "P", "G"))
+        # V4L2 驱动支持时只保留一个待取帧，减少视觉闭环读到运动前画面的概率。
+        # 少数后端会忽略该属性，因此控制器还会校验应用层帧龄。
+        self._capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
         with self._frame_condition:
             self._latest_frame = None
@@ -68,7 +86,7 @@ class OpenCVCamera:
             actual_resolution: tuple[int, int] | None = None
             with self._frame_lock:
                 if self._latest_frame is not None:
-                    height, width = self._latest_frame.shape[:2]
+                    height, width = self._latest_frame.bgr.shape[:2]
                     actual_resolution = (int(width), int(height))
             if actual_resolution is not None:
                 self._actual_resolution = actual_resolution
@@ -95,8 +113,12 @@ class OpenCVCamera:
                 time.sleep(0.02)
                 continue
             with self._frame_condition:
-                self._latest_frame = frame
                 self._frame_sequence += 1
+                self._latest_frame = CameraFrame(
+                    bgr=frame,
+                    sequence=self._frame_sequence,
+                    captured_at_monotonic=time.monotonic(),
+                )
                 self._frame_condition.notify_all()
 
     def close(self) -> None:
@@ -113,34 +135,48 @@ class OpenCVCamera:
             self._latest_frame = None
             self._frame_condition.notify_all()
 
-    def get_frame(self) -> np.ndarray | None:
-        """等待本调用线程尚未读取的新帧，并返回原始分辨率副本。"""
+    def get_frame_packet(self) -> CameraFrame | None:
+        """等待本调用线程尚未读取的新帧，并返回带采集时间的原图副本。"""
         if self._capture is None:
             raise RuntimeError("Camera is not open")
         previous_sequence = getattr(self._consumer_state, "last_sequence", -1)
         with self._frame_condition:
             self._frame_condition.wait_for(
                 lambda: self._capture is None
-                or (self._latest_frame is not None and self._frame_sequence != previous_sequence),
+                or (
+                    self._latest_frame is not None
+                    and self._latest_frame.sequence != previous_sequence
+                ),
                 timeout=1.0,
             )
             if (
                 self._capture is None
                 or self._latest_frame is None
-                or self._frame_sequence == previous_sequence
+                or self._latest_frame.sequence == previous_sequence
             ):
                 return None
-            self._consumer_state.last_sequence = self._frame_sequence
-            return self._latest_frame.copy()
+            packet = self._latest_frame
+            self._consumer_state.last_sequence = packet.sequence
+            return CameraFrame(
+                bgr=packet.bgr.copy(),
+                sequence=packet.sequence,
+                captured_at_monotonic=packet.captured_at_monotonic,
+            )
+
+    def get_frame(self) -> np.ndarray | None:
+        """兼容旧调用：返回本调用线程尚未读取的新原始分辨率图像。"""
+        packet = self.get_frame_packet()
+        return None if packet is None else packet.bgr
 
     def get_preview_frame(self, max_width: int = 1920, max_height: int = 1080) -> np.ndarray | None:
         """返回适合界面显示的缩放帧，避免反复复制 4024×3036 原图。"""
         if self._capture is None:
             raise RuntimeError("Camera is not open")
         with self._frame_lock:
-            frame = self._latest_frame
-        if frame is None:
+            packet = self._latest_frame
+        if packet is None:
             return None
+        frame = packet.bgr
         height, width = frame.shape[:2]
         scale = min(max_width / width, max_height / height, 1.0)
         if scale >= 1.0:

@@ -51,6 +51,8 @@ dXY_mm = clamp(v_xy_mm_s * position_step_horizon_s, adaptive_step_limit(e_px))
 
 位置式 IBVS 的每一步均等待机械臂规划运动结束；因此从较远目标开始对准时，`ibvs.max_align_time_s` 应保守设为 `30 s`，不建议仍使用连续速度模式的 `15 s` 默认值。
 
+为保证任务中界面流畅，自动吸取运行时 GUI 会暂停预览侧的 HSV 检测，只显示缩放预览；IBVS 独占原图检测，并由 `system.ibvs_max_detection_hz` 限速。预览参数 `preview_task_fps`、`preview_max_width` 和 `preview_max_height` 只影响界面显示，不改变标定、原图坐标或控制结果。
+
 ## 标定与现场调试
 
 1. 调 HSV：
@@ -131,7 +133,7 @@ python gui.py
 
 - `robot/realman_robot.py`：连接 `config.yaml` 中的控制器 IP，完成点位、相对 XY、可选 XY 速度透传、Z 运动和停止；工程单位为 mm / mm/s，适配层转换为 SDK 的 m / m/s。
 - `camera/opencv_camera.py`：通过 OpenCV 读取 USB 相机、视频文件或 RTSP 视频流。
-- `suction/adp_suction.py`：连接配置串口，可选发送 `G` 初始化和 `4` 吸液速度命令，每次吸取发送一次 `n + 体积` 命令。
+- `suction/adp_suction.py`：GUI 启动时连接配置串口；`initialize_on_startup=true` 时只发送一次 `G` 枪头脱落命令，并只设置一次可选 `4` 吸液速度。每次吸取只发送一次 `n + 体积` 命令。
 
 ADP 协议注意事项：
 

@@ -26,8 +26,10 @@ from PyQt6.QtWidgets import (
 
 from app.config import AppConfig
 from camera.opencv_camera import OpenCVCamera
+from suction.adp_suction import RealSuctionController
 from ui.control_worker import ControlWorker
 from ui.detection_worker import PreviewDetection, PreviewDetectionWorker
+from ui.suction_startup_worker import SuctionStartupWorker
 from ui.styles import APP_STYLE
 from vision.visualization import draw_detection_overlay
 
@@ -65,8 +67,13 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.config = config
         self.camera = OpenCVCamera(config.camera)
+        # 吸液枪对象覆盖整个 GUI 生命周期：G 枪头脱落和速度设置只能在启动阶段发生一次。
+        self.suction = RealSuctionController(config.suction)
+        self.suction_startup_worker: SuctionStartupWorker | None = None
+        self.suction_ready = False
         self.control_worker: ControlWorker | None = None
         self.camera_open = False
+        self._task_preview_mode = False
         self._last_qimage: QImage | None = None
         self._latest_detection: PreviewDetection | None = None
         self._detection_updated_at = 0.0
@@ -85,9 +92,10 @@ class MainWindow(QMainWindow):
         self.detection_worker.start()
 
         self.preview_timer = QTimer(self)
-        self.preview_timer.setInterval(50)  # 20 FPS 对操作预览足够，并降低 12MP 图像显示负担。
+        self._set_preview_mode(False)
         self.preview_timer.timeout.connect(self._update_preview)
         QTimer.singleShot(0, self._open_camera)
+        QTimer.singleShot(0, self._start_suction_startup)
 
     def _build_ui(self) -> None:
         root = _named(QWidget(), "root")
@@ -205,9 +213,59 @@ class MainWindow(QMainWindow):
         self.preview_timer.start()
         width, height = self.camera.get_resolution()
         self._set_status("相机已连接", "ready")
-        self.task_state.setText("系统待机，可开始识别吸取")
-        self.start_button.setEnabled(True)
+        self.task_state.setText("相机已连接，等待吸液枪初始化")
+        self._update_start_enabled()
         self._append_log(f"相机已连接，采集分辨率 {width} × {height}")
+
+    def _start_suction_startup(self) -> None:
+        """在独立 Qt 线程完成一次 ADP 串口连接、枪头脱落和速度设置。"""
+        if self.suction_startup_worker is not None:
+            return
+        worker = SuctionStartupWorker(self.suction, self)
+        self.suction_startup_worker = worker
+        worker.message.connect(self._append_log)
+        worker.ready.connect(self._on_suction_ready)
+        worker.failed.connect(self._on_suction_startup_failed)
+        worker.finished.connect(self._on_suction_startup_finished)
+        worker.start()
+
+    def _on_suction_ready(self) -> None:
+        self.suction_ready = True
+        self._append_log("ADP 吸液枪启动准备完成；后续吸液仅发送 n 命令")
+        if self.camera_open:
+            self.task_state.setText("系统待机，可开始识别吸取")
+            self._set_status("系统就绪", "ready")
+        self._update_start_enabled()
+
+    def _on_suction_startup_failed(self, error: str) -> None:
+        self.suction_ready = False
+        self._set_status("吸液枪初始化失败", "error")
+        self.task_state.setText(error)
+        self._append_log(f"ADP 吸液枪启动失败：{error}")
+        QMessageBox.critical(self, "ADP 吸液枪启动失败", error)
+        self._update_start_enabled()
+
+    def _on_suction_startup_finished(self) -> None:
+        """释放完成的启动线程，避免保留已删除 Qt 对象的 Python 引用。"""
+        worker = self.suction_startup_worker
+        self.suction_startup_worker = None
+        if worker is not None:
+            worker.deleteLater()
+
+    def _update_start_enabled(self) -> None:
+        """只有相机和一次性吸液枪准备都成功后才允许启动机械臂任务。"""
+        worker_running = self.control_worker is not None and self.control_worker.isRunning()
+        self.start_button.setEnabled(self.camera_open and self.suction_ready and not worker_running)
+
+    def _set_preview_mode(self, task_running: bool) -> None:
+        """Switch preview workload without changing the raw image used by IBVS."""
+        self._task_preview_mode = task_running
+        fps = self.config.system.preview_task_fps if task_running else self.config.system.preview_idle_fps
+        self.preview_timer.setInterval(max(1, round(1000.0 / fps)))
+        if task_running:
+            # 任务期间 GUI 不再运行第二套 HSV；控制器独占原图检测，避免 CPU 双重负载。
+            self._clear_detections()
+            self.target_info.setText("IBVS 原图检测中")
 
     def _reconnect_camera(self) -> None:
         if self.control_worker is not None and self.control_worker.isRunning():
@@ -225,7 +283,10 @@ class MainWindow(QMainWindow):
         if not self.camera_open:
             return
         try:
-            frame = self.camera.get_preview_frame()
+            frame = self.camera.get_preview_frame(
+                self.config.system.preview_max_width,
+                self.config.system.preview_max_height,
+            )
         except Exception as exc:
             self.preview_timer.stop()
             self.camera_open = False
@@ -235,11 +296,13 @@ class MainWindow(QMainWindow):
             return
         if frame is None:
             return
-        self.detection_worker.submit_frame(frame, self.camera.get_resolution())
+        if not self._task_preview_mode:
+            self.detection_worker.submit_frame(frame, self.camera.get_resolution())
 
         detection = self._latest_detection
         if (
-            detection is not None
+            not self._task_preview_mode
+            and detection is not None
             and detection.frame_width == frame.shape[1]
             and detection.frame_height == frame.shape[0]
             and time.monotonic() - self._detection_updated_at <= 1.0
@@ -270,12 +333,17 @@ class MainWindow(QMainWindow):
 
     def _on_detections_ready(self, detection: PreviewDetection) -> None:
         """接收后台检测结果；实际叠加绘制在下一次预览刷新中完成。"""
+        if self._task_preview_mode:
+            # 切换到任务模式前遗留的一帧预览检测结果不能覆盖 IBVS 运行状态。
+            return
         self._latest_detection = detection
         self._detection_updated_at = time.monotonic()
         total = len(detection.objects)
         self.target_info.setText(f"检测 {total} · 可吸 {detection.valid_count}")
 
     def _on_detection_failed(self, error: str) -> None:
+        if self._task_preview_mode:
+            return
         self._clear_detections()
         self._append_log(f"预览目标检测失败：{error}")
 
@@ -302,9 +370,12 @@ class MainWindow(QMainWindow):
         if not self.camera_open:
             QMessageBox.warning(self, "相机未连接", "请先连接相机。")
             return
+        if not self.suction_ready:
+            QMessageBox.warning(self, "吸液枪未就绪", "请等待 ADP 吸液枪启动准备完成。")
+            return
         if self.control_worker is not None and self.control_worker.isRunning():
             return
-        self.control_worker = ControlWorker(self.config, self.camera, self)
+        self.control_worker = ControlWorker(self.config, self.camera, self.suction, self)
         self.control_worker.state_changed.connect(self._on_state_changed)
         self.control_worker.log_message.connect(self._append_log)
         self.control_worker.control_finished.connect(self._on_control_finished)
@@ -316,6 +387,7 @@ class MainWindow(QMainWindow):
         self._set_status("任务运行中", "running")
         self.task_state.setText("正在初始化识别吸取任务……")
         self._append_log("操作员启动自动识别吸取")
+        self._set_preview_mode(True)
         self.control_worker.start()
 
     def _stop_control(self) -> None:
@@ -350,7 +422,8 @@ class MainWindow(QMainWindow):
         if worker is not None:
             worker.deleteLater()
         self.control_worker = None
-        self.start_button.setEnabled(self.camera_open)
+        self._set_preview_mode(False)
+        self._update_start_enabled()
         self.stop_button.setEnabled(False)
         self.reconnect_button.setEnabled(True)
 
@@ -364,6 +437,13 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(self, "正在安全停止", "机械臂控制仍在停止中，请稍后再次关闭窗口。")
                 event.ignore()
                 return
+        startup_worker = self.suction_startup_worker
+        if startup_worker is not None and startup_worker.isRunning():
+            if not startup_worker.wait(5000):
+                self._append_log("ADP 启动线程尚未退出，窗口暂不能关闭")
+                QMessageBox.warning(self, "正在关闭", "ADP 启动仍在进行，请稍后再次关闭窗口。")
+                event.ignore()
+                return
         self.preview_timer.stop()
         self.detection_worker.stop()
         if not self.detection_worker.wait(2000):
@@ -371,4 +451,8 @@ class MainWindow(QMainWindow):
             event.ignore()
             return
         self.camera.close()
+        try:
+            self.suction.close()
+        except Exception as exc:
+            self._append_log(f"关闭 ADP 串口失败：{exc}")
         event.accept()

@@ -15,6 +15,9 @@ camera:
   enable_undistort: false
   # 相机内参文件路径，应包含 camera_matrix 和 dist_coeffs；相对路径以项目根目录为准。
   intrinsic_path: data/camera_intrinsic.npy
+  # IBVS 可接受的相机帧最大年龄，单位 s。采集线程取得图像后立即记录时间；
+  # 帧超过此时间仍未被控制器使用时，视为过期并拒绝执行视觉运动。
+  max_frame_age_s: 0.25
 
 vision:
   # OpenCV HSV 下限 [H,S,V]。OpenCV 的 H 范围是 0~179，S/V 范围是 0~255。
@@ -143,11 +146,12 @@ suction:
   response_bytes: 20
   # true=必须收到非空响应才认为命令成功；原实现未校验空响应，因此默认false以保持协议兼容。
   require_response: false
-  # 是否在第一次吸液前发送G初始化命令。初始化可能驱动设备，确认设备行为后再改为true。
-  initialize_before_first_absorb: false
+  # GUI 启动时是否仅发送一次 G 枪头脱落命令；同一 GUI 生命周期内的后续任务和每次吸液都不会重复发送 G。
+  # G 会产生实体动作，只有确认启动软件时应执行枪头脱落时才设为 true。
+  initialize_on_startup: true
   # 每个目标下发一次n吸液命令的体积，单位微升；附件示例使用800。
   absorb_volume_ul: 800
-  # 吸液速度，单位微升/秒，范围1~9999；null表示沿用设备当前速度，不发送4号设置命令。
+  # 吸液速度，单位微升/秒，范围1~9999；非 null 时仅在 GUI 启动初始化阶段发送一次 4 号设置命令。
   absorb_speed_ul_s: null
 
 safety:
@@ -164,3 +168,12 @@ system:
   loop_hz: 30.0
   # 同一轮任务连续恢复的最大次数。达到后进入 ERROR，防止目标/标定异常时无限循环运动。
   max_recovery_attempts: 3
+  # 待机时 GUI 预览刷新率；预览检测仅在待机时执行。
+  preview_idle_fps: 20.0
+  # 自动任务期间 GUI 仅显示缩放画面，不重复 HSV 检测；降低刷新率给原图 IBVS 留出 CPU。
+  preview_task_fps: 10.0
+  # GUI 预览图的最大尺寸；只影响显示，不影响原图 IBVS、像素坐标或标定。
+  preview_max_width: 1280
+  preview_max_height: 960
+  # 位置式 IBVS 的最大原图检测频率。每次 XY 微移都要等待机械臂停止，10Hz 已足够。
+  ibvs_max_detection_hz: 10.0

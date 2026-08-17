@@ -19,6 +19,7 @@ class CameraConfig:
     video_path: str | None
     enable_undistort: bool
     intrinsic_path: str
+    max_frame_age_s: float
 
 
 @dataclass(frozen=True)
@@ -93,7 +94,7 @@ class SuctionConfig:
     retry_delay_s: float
     response_bytes: int
     require_response: bool
-    initialize_before_first_absorb: bool
+    initialize_on_startup: bool
     absorb_volume_ul: int
     absorb_speed_ul_s: int | None
 
@@ -109,6 +110,11 @@ class SystemConfig:
     save_csv: bool
     loop_hz: float
     max_recovery_attempts: int
+    preview_idle_fps: float
+    preview_task_fps: float
+    preview_max_width: int
+    preview_max_height: int
+    ibvs_max_detection_hz: float
 
 
 @dataclass(frozen=True)
@@ -155,6 +161,7 @@ def _validate(config: AppConfig) -> None:
     _require_positive_int("camera.width", config.camera.width)
     _require_positive_int("camera.height", config.camera.height)
     _require_positive_int("camera.fps", config.camera.fps)
+    _require_positive("camera.max_frame_age_s", config.camera.max_frame_age_s)
 
     for name, values, limits in (
         ("vision.hsv_lower", config.vision.hsv_lower, (179, 255, 255)),
@@ -244,6 +251,8 @@ def _validate(config: AppConfig) -> None:
         raise ValueError("suction.hold_time_s must be non-negative and finite")
     if not str(config.suction.serial_port).strip():
         raise ValueError("suction.serial_port must not be empty")
+    if not isinstance(config.suction.initialize_on_startup, bool):
+        raise ValueError("suction.initialize_on_startup must be a boolean")
     _require_positive_int("suction.baudrate", config.suction.baudrate)
     _require_positive("suction.timeout_s", config.suction.timeout_s)
     _require_positive_int("suction.max_retries", config.suction.max_retries)
@@ -265,6 +274,11 @@ def _validate(config: AppConfig) -> None:
     _require_positive_int("safety.camera_failure_limit", config.safety.camera_failure_limit)
     _require_positive("system.loop_hz", config.system.loop_hz)
     _require_positive_int("system.max_recovery_attempts", config.system.max_recovery_attempts)
+    _require_positive("system.preview_idle_fps", config.system.preview_idle_fps)
+    _require_positive("system.preview_task_fps", config.system.preview_task_fps)
+    _require_positive_int("system.preview_max_width", config.system.preview_max_width)
+    _require_positive_int("system.preview_max_height", config.system.preview_max_height)
+    _require_positive("system.ibvs_max_detection_hz", config.system.ibvs_max_detection_hz)
 
 
 def load_config(path: str | Path) -> AppConfig:

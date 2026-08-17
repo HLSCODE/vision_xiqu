@@ -79,9 +79,27 @@ class RealSuctionController(SuctionController):
         return bytes(self._last_response)
 
     def connect(self) -> None:
-        """Open and verify ownership of the configured serial port without moving the pipette."""
+        """Open and verify ownership of the configured serial port without actuating the pipette."""
         with self._io_lock:
             self._ensure_serial_open_locked()
+
+    def initialize_for_application(self) -> None:
+        """Perform the optional one-time GUI-startup preparation.
+
+        ``G`` is the supplied device's physical tip-drop command, not a harmless
+        communication handshake. It is therefore intentionally sent at most once
+        for one ``RealSuctionController`` instance, never from :meth:`on`.
+        """
+        with self._state_lock:
+            if self._initialized:
+                return
+        self.connect()
+        if self.config.initialize_on_startup:
+            self._send_command(self._create_command("G"))
+        if self.config.absorb_speed_ul_s is not None:
+            self._send_command(self._create_command("4", self.config.absorb_speed_ul_s))
+        with self._state_lock:
+            self._initialized = True
 
     def _ensure_serial_open_locked(self, max_attempts: int | None = None) -> Any:
         if self._serial is not None and bool(getattr(self._serial, "is_open", False)):
@@ -166,17 +184,12 @@ class RealSuctionController(SuctionController):
         ) from last_error
 
     def on(self) -> None:
-        """Optionally initialize/set speed, then command one configured aspiration volume."""
+        """Command one configured aspiration volume; startup preparation is never repeated here."""
         with self._state_lock:
             if self._active:
                 return
             generation = self._cancel_generation
 
-        if self.config.initialize_before_first_absorb and not self._initialized:
-            self._send_command(self._create_command("G"))
-            self._initialized = True
-        if self.config.absorb_speed_ul_s is not None:
-            self._send_command(self._create_command("4", self.config.absorb_speed_ul_s))
         self._send_command(self._create_command("n", self.config.absorb_volume_ul))
 
         with self._state_lock:

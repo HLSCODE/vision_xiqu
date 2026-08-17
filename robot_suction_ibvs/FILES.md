@@ -18,9 +18,10 @@
 
 | 文件 | 功能 |
 | --- | --- |
-| `ui/main_window.py` | 实时相机预览与目标标记、任务状态、开始吸取、停止/急停与运行日志界面。 |
+| `ui/main_window.py` | 实时相机预览与目标标记、任务状态、开始吸取、停止/急停与运行日志界面；任务中自动暂停重复预览检测并降低仅显示用刷新负载。 |
 | `ui/detection_worker.py` | 在独立线程中检测最新预览帧，忙时丢弃旧帧，避免目标识别阻塞界面。 |
-| `ui/control_worker.py` | 在独立 Qt 线程中运行状态机，避免机械臂 SDK 阻塞界面。 |
+| `ui/control_worker.py` | 在独立 Qt 线程中运行状态机，避免机械臂 SDK 阻塞界面；复用 GUI 启动时准备好的吸液枪。 |
+| `ui/suction_startup_worker.py` | 在 GUI 启动时独立连接 ADP 串口，并仅执行一次枪头脱落与吸液速度设置。 |
 | `ui/styles.py` | 集中管理界面的颜色、按钮、状态标签和日志样式。 |
 
 ## 核心控制
@@ -30,7 +31,7 @@
 | `app/config.py` | 读取并校验 YAML 配置，提供带类型的配置对象。 |
 | `app/calibration_data.py` | 保存/读取标定数组及 JSON 上下文，校验分辨率、内参、观察位和工作坐标系一致性。 |
 | `app/state.py` | 定义初始化、检测、直接 IBVS 对准、下降、吸取、恢复等状态。 |
-| `app/controller.py` | 显式状态机；实现检测、锁定、直接对准吸管轴线参考像素、下降、吸取和回观察位循环。 |
+| `app/controller.py` | 显式状态机；实现检测、锁定、直接对准吸管轴线参考像素、下降、吸取和回观察位循环，并限制原图 IBVS 检测频率。 |
 | `app/logging_utils.py` | 创建会话日志和可选 CSV 控制记录。 |
 | `vision/detector.py` | HSV 分割、形态学处理、轮廓提取和像素尺寸筛选。 |
 | `vision/models.py` | 检测目标、检测结果和跟踪结果的数据结构。 |
@@ -47,7 +48,7 @@
 | `robot/base.py` | 机械臂统一接口。 |
 | `robot/realman_robot.py` | 睿尔曼 API2 连接、位姿换算、规划运动、相对 XY、可选 XY 速度透传和停止控制。 |
 | `suction/base.py` | 吸取执行器统一接口。 |
-| `suction/adp_suction.py` | ADP 串口连接、CRC 帧、初始化、吸液速度和定量吸液命令实现。 |
+| `suction/adp_suction.py` | ADP 串口连接、CRC 帧、一次性 GUI 启动准备、吸液速度和定量吸液命令实现。 |
 
 ## 标定与现场工具
 

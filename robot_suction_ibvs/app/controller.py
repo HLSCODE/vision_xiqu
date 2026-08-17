@@ -104,6 +104,8 @@ class SuctionRobotController:
         # 同一轮未成功吸取的恢复次数；达到配置上限后停止，避免异常目标无限重试。
         self._recovery_attempts = 0
         self._last_control_time = time.monotonic()
+        # 位置式 IBVS 不需要按主循环 30Hz 重复跑 8MP 图像检测；该时间戳限制原图检测负载。
+        self._last_ibvs_detection_at = 0.0
         self._suction_started_at: float | None = None
         self.pick_count = 0
 
@@ -192,12 +194,23 @@ class SuctionRobotController:
             通过最小面积筛选的目标列表。相机单帧失败时返回 ``None``，
             连续失败次数由安全层负责判断。尺寸资格只在全局选目标阶段计算。
         """
-        frame = self.camera.get_frame()
-        # 连续断流由 SafetyManager 计数并触发停止，单帧失败不会继续使用旧图像运动。
-        self.safety.report_camera_frame(frame is not None)
-        if frame is None:
+        packet = self.camera.get_frame_packet()
+        if packet is None:
+            # 连续断流由 SafetyManager 计数并触发停止，单帧失败不会继续使用旧图像运动。
+            self.safety.report_camera_frame(False)
             return None
-        result = self.detector.detect(frame)
+        frame_age_s = time.monotonic() - packet.captured_at_monotonic
+        if frame_age_s > self.config.camera.max_frame_age_s:
+            self.logger.warning(
+                "Rejecting stale camera frame sequence=%d age=%.3fs (limit %.3fs)",
+                packet.sequence,
+                frame_age_s,
+                self.config.camera.max_frame_age_s,
+            )
+            self.safety.report_camera_frame(False)
+            return None
+        self.safety.report_camera_frame(True)
+        result = self.detector.detect(packet.bgr)
         return result.objects
 
     def _handle_init(self) -> None:
@@ -246,6 +259,7 @@ class SuctionRobotController:
         self._previous_error_norm = None
         self._center_samples.clear()
         self._settle_frames_remaining = 0
+        self._last_ibvs_detection_at = 0.0
         # 记录控制周期起点，使 IBVS 的速度变化率限制使用真实 dt。
         self._last_control_time = time.monotonic()
         # 上一个目标的速度不能带入下一个目标，否则切换瞬间可能产生不必要的惯性命令。
@@ -269,9 +283,13 @@ class SuctionRobotController:
             self.safety.stop_xy()
             self.transition(SystemState.RECOVER, "IBVS alignment timeout")
             return
+        detection_period_s = 1.0 / self.config.system.ibvs_max_detection_hz
+        if time.monotonic() - self._last_ibvs_detection_at < detection_period_s:
+            return
         data = self._get_detection()
         if data is None:
             return
+        self._last_ibvs_detection_at = time.monotonic()
         objects = data
         # IBVS 期间不做尺寸筛选或重新选目标，只对上一帧中心做最近邻关联。
         association = self.tracker.associate(self.last_center_px, objects)
