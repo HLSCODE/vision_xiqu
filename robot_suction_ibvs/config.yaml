@@ -9,7 +9,7 @@ camera:
   # 请求采集帧率，单位 FPS；实际帧率受相机、USB 带宽和曝光时间影响。
   fps: 30
   # OpenCV 视频源。Ubuntu 可填写 /dev/video6，也可填写整数索引（如 0）。
-  device_id: "/dev/video12"
+  device_id: "/dev/video6"
   video_path: null
   # 是否在控制器的原始图像检测前使用相机内参进行畸变校正。
   enable_undistort: false
@@ -22,10 +22,10 @@ camera:
 vision:
   # OpenCV HSV 下限 [H,S,V]。OpenCV 的 H 范围是 0~179，S/V 范围是 0~255。
   # 当前下限与 hsv_upper 组合后表示黑色：不限制色相、饱和度，只限制低亮度。
-  hsv_lower: [0, 0, 0]
+  hsv_lower: [0, 30, 0]
   # HSV 上限 [H,S,V]。V=80 越大越容易检出浅黑目标，也越容易把阴影识别为目标；
   # 阴影误检时可将 V 调低到 50~70，黑色目标漏检时可适当调高。
-  hsv_upper: [179, 255, 120]
+  hsv_upper: [20, 255, 255]
   # 轮廓最小面积，单位为原始图像 px²；小于该面积的轮廓视为噪声并丢弃。
   min_area_px: 300.0
   # HSV 掩膜开运算/闭运算的椭圆核尺寸，单位 px；建议使用正奇数，越大去噪越强，
@@ -47,18 +47,18 @@ tracking:
 ibvs:
   # IBVS比例增益，控制公式为 v=-gain*inv(A)*像素误差，量纲可理解为 1/s。
   # 越大对准越快但更容易超调/振荡；越小更平稳但对准时间更长。
-  gain: 0.5
+  gain: 1
   # XY合速度上限，单位 mm/s；限制 sqrt(vx²+vy²)，首次真机建议保持低速。
   max_velocity_mm_s: 5.0
   # 非零XY合速度下限，单位 mm/s；设置为0表示不强制最低速度，通常更利于小误差稳定。
   min_velocity_mm_s: 0.0
   # 对准像素容差，单位为原始图像 px。误差进入容差后速度置零，并开始累计稳定帧。
-  pixel_tolerance: 5.0
+  pixel_tolerance: 10.0
   # 必须连续多少帧满足吸管轴线对准像素容差，才允许下降；越大越不易被单帧噪声误触发。
   stable_frames: 5
   # 单个目标XY对准的最长时间，单位 s；位置式 IBVS 每次等待短距离 rm_movel 完成，
   # 因此从作业区边缘开始对准时需要比连续速度透传更长的时间。
-  max_align_time_s: 30.0
+  max_align_time_s: 120.0
   # 像素误差连续增长达到多少帧后判定方向/标定可能异常，并停止当前对准。
   error_growth_frames: 10
   # 减速区半径，单位为原始图像 px；误差小于该值时速度按比例减小，0表示关闭减速区。
@@ -71,11 +71,11 @@ ibvs:
   # 自适应步长分段边界，单位为原图 px。误差大时走大步，接近后自动走小步。
   far_error_px: 200.0
   medium_error_px: 50.0
-  near_error_px: 10.0
+  near_error_px: 25.0
   # 三个误差区间对应的单步最大合位移，单位 mm。建议先用默认值，确认安全后再调快。
-  far_max_step_mm: 1.0
-  medium_max_step_mm: 0.5
-  near_max_step_mm: 0.15
+  far_max_step_mm: 1.5
+  medium_max_step_mm: 0.85
+  near_max_step_mm: 0.5
   # 无论毫米步长如何，每步由 servo_A 预测的图像位移都不超过此值，必须小于跟踪阈值。
   max_predicted_image_step_px: 45.0
   # 每个静止观察阶段用于中值滤波的连续目标中心帧数；增大更稳，但会略微变慢。
@@ -84,7 +84,7 @@ ibvs:
   post_move_settle_frames: 1
   # 已进入 pixel_tolerance 后，误差不超过该值时保持静止并继续稳定计数；
   # 它必须大于 pixel_tolerance，形成防抖滞回，也是最终允许的最大稳定误差。
-  stable_exit_tolerance_px: 8.0
+  stable_exit_tolerance_px: 15.0
   # 固定观察高度下标定的像素/毫米二维映射矩阵；同时要求存在同名 .json 元数据文件。
   servo_A_path: data/servo_A.npy
 
@@ -112,11 +112,11 @@ robot:
   # 固定观察高度，单位 mm。相对Z模式用它计算下降量，应与observe_pose中的z一致。
   observe_z_mm: -186.180
   # 吸取高度，单位 mm。absolute模式表示绝对Z；relative模式下与observe_z_mm做差得到下降量。
-  pick_z_mm:  -187.180
+  pick_z_mm:  -199.180
   # 吸取后的安全抬升高度，单位 mm。absolute模式表示绝对Z；relative模式用于计算抬升量。
-  safe_z_mm:  -186.180
+  safe_z_mm:  -183.180
   # Z参数安全确认开关。false时适配器拒绝所有Z运动；实测三个高度并核对后才能改为true。
-  z_motion_confirmed: false
+  z_motion_confirmed: true
   # Z运动模式：absolute=使用工作坐标系绝对Z；relative=按观察/吸取/安全高度之差相对移动。
   z_mode: absolute
   # 垂直下降请求速度，单位 mm/s；适配器会按机械臂最大线速度换算成SDK速度百分比。

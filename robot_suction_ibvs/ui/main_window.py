@@ -231,7 +231,7 @@ class MainWindow(QMainWindow):
 
     def _on_suction_ready(self) -> None:
         self.suction_ready = True
-        self._append_log("ADP 吸液枪启动准备完成；后续吸液仅发送 n 命令")
+        # self._append_log("ADP 吸液枪启动准备完成；后续吸液仅发送 n 命令")
         if self.camera_open:
             self.task_state.setText("系统待机，可开始识别吸取")
             self._set_status("系统就绪", "ready")

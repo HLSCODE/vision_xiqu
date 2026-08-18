@@ -26,8 +26,8 @@ class SuctionStartupWorker(QThread):
         try:
             self.message.emit("正在连接 ADP 吸液枪……")
             self._suction.connect()
-            if self._suction.config.initialize_on_startup:
-                self.message.emit("正在执行一次 ADP 枪头脱落初始化……")
+            # if self._suction.config.initialize_on_startup:
+            #     self.message.emit("正在执行一次 ADP 枪头脱落初始化……")
             self._suction.initialize_for_application()
             self.ready.emit()
         except Exception as exc:
