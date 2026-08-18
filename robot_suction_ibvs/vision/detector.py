@@ -1,4 +1,4 @@
-"""HSV segmentation and contour measurements for configured target colours."""
+"""RGB segmentation and contour measurements for configured target colours."""
 
 from __future__ import annotations
 
@@ -11,8 +11,8 @@ from app.config import VisionConfig
 from vision.models import DetectedObject, DetectionResult
 
 
-class HSVObjectDetector:
-    """Detect static objects using the HSV range configured in ``config.yaml``."""
+class RGBObjectDetector:
+    """Detect static objects using the RGB range configured in ``config.yaml``."""
 
     def __init__(
         self,
@@ -77,11 +77,11 @@ class HSVObjectDetector:
         if frame_bgr is None or frame_bgr.ndim != 3:
             raise ValueError("Expected a non-empty BGR image with three channels")
         frame = self.preprocess(frame_bgr)
-        # OpenCV 相机帧通常是 BGR；阈值统一在 HSV 空间配置，便于现场调参。
-        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-        lower = np.asarray(self.config.hsv_lower, dtype=np.uint8)
-        upper = np.asarray(self.config.hsv_upper, dtype=np.uint8)
-        mask = cv2.inRange(hsv, lower, upper)
+        # OpenCV 相机帧通常为 BGR；先显式转换后，配置始终按 [R, G, B] 理解。
+        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        lower = np.asarray(self.config.rgb_lower, dtype=np.uint8)
+        upper = np.asarray(self.config.rgb_upper, dtype=np.uint8)
+        mask = cv2.inRange(rgb, lower, upper)
         kernel_size = max(1, int(self.config.morphology_kernel))
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
         # 先开运算剔除零散噪点，再闭运算填补同一目标内的小孔洞。

@@ -1,4 +1,4 @@
-"""Visualize HSV contours, pixel sizes, and observation-only size eligibility."""
+"""Visualize RGB contours, pixel sizes, and observation-only size eligibility."""
 
 from __future__ import annotations
 
@@ -13,17 +13,17 @@ import cv2
 
 from app.config import load_config
 from camera.opencv_camera import OpenCVCamera
-from vision.detector import HSVObjectDetector
+from vision.detector import RGBObjectDetector
 from vision.visualization import draw_detection_overlay
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Inspect HSV detection and size_px filtering")
+    parser = argparse.ArgumentParser(description="Inspect RGB detection and size_px filtering")
     parser.add_argument("--config", default="config.yaml")
     args = parser.parse_args()
     config = load_config(args.config)
     camera = OpenCVCamera(config.camera)
-    detector = HSVObjectDetector(
+    detector = RGBObjectDetector(
         config.vision,
         config.path(config.camera.intrinsic_path),
         config.camera.enable_undistort,
@@ -41,7 +41,7 @@ def main() -> int:
             valid_indices = frozenset(obj.index for obj in valid)
             overlay = draw_detection_overlay(detector.preprocess(frame), result.objects, valid_indices)
             cv2.imshow("Detection inspection", overlay)
-            cv2.imshow("HSV mask", result.mask)
+            cv2.imshow("RGB mask", result.mask)
             if cv2.waitKey(1) & 0xFF in (ord("q"), 27):
                 return 0
     finally:

@@ -7,7 +7,7 @@
 | 文件/目录 | 功能 |
 | --- | --- |
 | `gui.py` | PyQt6 桌面界面入口，显示相机画面并启动/停止识别吸取。 |
-| `config.yaml` | 所有可调参数：相机、HSV、尺寸筛选、IBVS、安全和 Z 轴。 |
+| `config.yaml` | 所有可调参数：相机、RGB、尺寸筛选、IBVS、安全和 Z 轴。 |
 | `requirements.txt` | 运行所需的 Python 依赖。 |
 | `README.md` | 安装、标定、现场运行及真实 SDK 接入说明。 |
 | `FILES.md` | 本文件；说明保留文件的职责。 |
@@ -33,7 +33,7 @@
 | `app/state.py` | 定义初始化、检测、直接 IBVS 对准、下降、吸取、恢复等状态。 |
 | `app/controller.py` | 显式状态机；实现检测、锁定、直接对准吸管轴线参考像素、下降、吸取和回观察位循环，并限制原图 IBVS 检测频率。 |
 | `app/logging_utils.py` | 创建会话日志和可选 CSV 控制记录。 |
-| `vision/detector.py` | HSV 分割、形态学处理、轮廓提取和像素尺寸筛选。 |
+| `vision/detector.py` | RGB 分割、形态学处理、轮廓提取和像素尺寸筛选。 |
 | `vision/models.py` | 检测目标、检测结果和跟踪结果的数据结构。 |
 | `vision/tracker.py` | 对锁定目标做最近邻关联，不切换为其他目标。 |
 | `vision/visualization.py` | 为 PyQt 相机预览绘制目标轮廓、编号和换算后的原图 `(u,v)` 坐标。 |
@@ -57,6 +57,6 @@
 | `calibration/calibrate_camera.py` | 用棋盘格图像标定可选相机内参和畸变。 |
 | `calibration/calibrate_servo_xy.py` | 通过已知 XY 微位移拟合并验证 `servo_A.npy`，同时保存标定上下文 JSON。 |
 | `calibration/calibrate_suction_ref.py` | 在吸管轴线已正对一个可见目标时，采集稳定的目标中心，保存直接 IBVS 使用的 `suction_ref.npy` 及上下文。 |
-| `tools/hsv_tuner.py` | 用滑块现场调 HSV 阈值并保存 JSON。 |
+| `tools/rgb_tuner.py` | 用滑块现场调 RGB 阈值并保存 JSON。 |
 | `tools/inspect_camera.py` | 检查相机设备、分辨率、帧率与断流。 |
-| `tools/inspect_detection.py` | 检查 HSV 轮廓、`size_px` 与尺寸筛选结果。 |
+| `tools/inspect_detection.py` | 检查 RGB 轮廓、`size_px` 与尺寸筛选结果。 |

@@ -30,7 +30,7 @@ from app.config import load_config
 from camera.opencv_camera import OpenCVCamera
 from control.safety import SafetyManager
 from robot.realman_robot import RealRobot
-from vision.detector import HSVObjectDetector
+from vision.detector import RGBObjectDetector
 
 
 def wait_for_settle(camera: OpenCVCamera, seconds: float, label: str) -> None:
@@ -48,7 +48,7 @@ def wait_for_settle(camera: OpenCVCamera, seconds: float, label: str) -> None:
 
 def sample_stable_center(
     camera: OpenCVCamera,
-    detector: HSVObjectDetector,
+    detector: RGBObjectDetector,
     frames: int,
     max_jitter_px: float,
     timeout_s: float,
@@ -92,7 +92,7 @@ def sample_stable_center(
     raise RuntimeError(
         f"{label}: no stable {frames}-frame centre within {timeout_s:.1f}s; "
         f"valid_frames={valid_frames}, invalid_frames={invalid_frames}. "
-        "Keep one eligible target in view and check HSV detection."
+        "Keep one eligible target in view and check RGB detection."
     )
 
 
@@ -140,7 +140,7 @@ def main() -> int:
     config = load_config(args.config)
     camera = OpenCVCamera(config.camera)
     robot = RealRobot(config.robot)
-    detector = HSVObjectDetector(
+    detector = RGBObjectDetector(
         config.vision,
         config.path(config.camera.intrinsic_path),
         config.camera.enable_undistort,

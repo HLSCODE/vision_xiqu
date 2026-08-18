@@ -263,7 +263,7 @@ class MainWindow(QMainWindow):
         fps = self.config.system.preview_task_fps if task_running else self.config.system.preview_idle_fps
         self.preview_timer.setInterval(max(1, round(1000.0 / fps)))
         if task_running:
-            # 任务期间 GUI 不再运行第二套 HSV；控制器独占原图检测，避免 CPU 双重负载。
+            # 任务期间 GUI 不再运行第二套 RGB；控制器独占原图检测，避免 CPU 双重负载。
             self._clear_detections()
             self.target_info.setText("IBVS 原图检测中")
 

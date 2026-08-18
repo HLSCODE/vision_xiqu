@@ -9,7 +9,7 @@ import numpy as np
 from PyQt6.QtCore import QThread, pyqtSignal
 
 from app.config import AppConfig, VisionConfig
-from vision.detector import HSVObjectDetector
+from vision.detector import RGBObjectDetector
 from vision.models import DetectedObject
 
 
@@ -31,7 +31,7 @@ class PreviewDetection:
 
 
 class PreviewDetectionWorker(QThread):
-    """在后台执行 HSV 检测；处理不过来时主动丢弃旧预览帧。"""
+    """在后台执行 RGB 检测；处理不过来时主动丢弃旧预览帧。"""
 
     detections_ready = pyqtSignal(object)
     detection_failed = pyqtSignal(str)
@@ -63,7 +63,7 @@ class PreviewDetectionWorker(QThread):
             self._condition.notify_all()
 
     def run(self) -> None:
-        detector: HSVObjectDetector | None = None
+        detector: RGBObjectDetector | None = None
         detector_key: tuple[int, int, int, int] | None = None
 
         while True:
@@ -84,7 +84,7 @@ class PreviewDetectionWorker(QThread):
                 source_width, source_height = source_resolution
                 key = (frame_width, frame_height, source_width, source_height)
                 if detector is None or key != detector_key:
-                    detector = HSVObjectDetector(
+                    detector = RGBObjectDetector(
                         self._scaled_config(frame_width, frame_height, source_width, source_height),
                         intrinsic_path=self._intrinsic_path,
                         enable_undistort=self._enable_undistort,

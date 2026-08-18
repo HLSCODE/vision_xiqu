@@ -24,8 +24,8 @@ class CameraConfig:
 
 @dataclass(frozen=True)
 class VisionConfig:
-    hsv_lower: tuple[int, int, int]
-    hsv_upper: tuple[int, int, int]
+    rgb_lower: tuple[int, int, int]
+    rgb_upper: tuple[int, int, int]
     min_area_px: float
     morphology_kernel: int
     size_threshold_px: float
@@ -163,14 +163,14 @@ def _validate(config: AppConfig) -> None:
     _require_positive_int("camera.fps", config.camera.fps)
     _require_positive("camera.max_frame_age_s", config.camera.max_frame_age_s)
 
-    for name, values, limits in (
-        ("vision.hsv_lower", config.vision.hsv_lower, (179, 255, 255)),
-        ("vision.hsv_upper", config.vision.hsv_upper, (179, 255, 255)),
+    for name, values in (
+        ("vision.rgb_lower", config.vision.rgb_lower),
+        ("vision.rgb_upper", config.vision.rgb_upper),
     ):
-        if len(values) != 3 or any(value < 0 or value > limit for value, limit in zip(values, limits)):
-            raise ValueError(f"{name} must be [H,S,V] within OpenCV HSV ranges")
-    if any(lower > upper for lower, upper in zip(config.vision.hsv_lower, config.vision.hsv_upper)):
-        raise ValueError("vision.hsv_lower must not exceed vision.hsv_upper")
+        if len(values) != 3 or any(value < 0 or value > 255 for value in values):
+            raise ValueError(f"{name} must be [R,G,B] with every channel in 0..255")
+    if any(lower > upper for lower, upper in zip(config.vision.rgb_lower, config.vision.rgb_upper)):
+        raise ValueError("vision.rgb_lower must not exceed vision.rgb_upper")
     _require_positive("vision.min_area_px", config.vision.min_area_px)
     _require_positive("vision.morphology_kernel", config.vision.morphology_kernel)
     _require_positive("vision.size_threshold_px", config.vision.size_threshold_px)
@@ -302,7 +302,7 @@ def load_config(path: str | Path) -> AppConfig:
         root_dir=config_path.parent,
         camera=CameraConfig(**camera),
         vision=VisionConfig(
-            **{**vision, "hsv_lower": tuple(vision["hsv_lower"]), "hsv_upper": tuple(vision["hsv_upper"])}
+            **{**vision, "rgb_lower": tuple(vision["rgb_lower"]), "rgb_upper": tuple(vision["rgb_upper"])}
         ),
         tracking=TrackingConfig(**tracking),
         ibvs=IBVSConfig(**ibvs),

@@ -1,6 +1,6 @@
 # Eye-in-Hand 视觉伺服小目标自动吸取系统
 
-本工程实现固定观察高度的小目标自动吸取流程：HSV 黑色目标分割、像素尺寸筛选、单目标最近邻锁定、二维 IBVS 直接对准吸管轴线、Z 轴下降、ADP 定量吸液、抬升和返回观察位。
+本工程实现固定观察高度的小目标自动吸取流程：RGB 黑色目标分割、像素尺寸筛选、单目标最近邻锁定、二维 IBVS 直接对准吸管轴线、Z 轴下降、ADP 定量吸液、抬升和返回观察位。
 
 不包含 YOLO、RGB-D、深度估计、PBVS、完整手眼标定 AX=XB、世界坐标转换或复杂多目标跟踪。
 
@@ -35,7 +35,7 @@ sudo usermod -aG dialout "$USER"
 
 ## 工作原理
 
-在 `GLOBAL_DETECT` 状态，图像经 HSV 阈值分割、开闭运算和轮廓提取。每个轮廓计算质心 `[u,v]`、面积、旋转矩形宽高和 `size_px = max(width_px, height_px)`。仅 `size_px < vision.size_threshold_px` 的对象能被选作吸取目标。
+在 `GLOBAL_DETECT` 状态，图像先由 BGR 转为 RGB，再经 RGB 阈值分割、开闭运算和轮廓提取。每个轮廓计算中心 `[u,v]`、面积、旋转矩形宽高和 `size_px = max(width_px, height_px)`。仅 `size_px < vision.size_threshold_px` 的对象能被选作吸取目标。
 
 进入 `ALIGN_IBVS` 后，不再重新做尺寸筛选或重新选择对象；只在当前帧中关联距上一帧锁定目标最近的轮廓。IBVS 直接将目标中心对准吸管轴线参考点：
 
@@ -51,14 +51,14 @@ dXY_mm = clamp(v_xy_mm_s * position_step_horizon_s, adaptive_step_limit(e_px))
 
 位置式 IBVS 的每一步均等待机械臂规划运动结束；因此从较远目标开始对准时，`ibvs.max_align_time_s` 应保守设为 `30 s`，不建议仍使用连续速度模式的 `15 s` 默认值。
 
-为保证任务中界面流畅，自动吸取运行时 GUI 会暂停预览侧的 HSV 检测，只显示缩放预览；IBVS 独占原图检测，并由 `system.ibvs_max_detection_hz` 限速。预览参数 `preview_task_fps`、`preview_max_width` 和 `preview_max_height` 只影响界面显示，不改变标定、原图坐标或控制结果。
+为保证任务中界面流畅，自动吸取运行时 GUI 会暂停预览侧的 RGB 检测，只显示缩放预览；IBVS 独占原图检测，并由 `system.ibvs_max_detection_hz` 限速。预览参数 `preview_task_fps`、`preview_max_width` 和 `preview_max_height` 只影响界面显示，不改变标定、原图坐标或控制结果。
 
 ## 标定与现场调试
 
-1. 调 HSV：
+1. 调 RGB：
 
    ```bash
-   python tools/hsv_tuner.py --config config.yaml
+   python tools/rgb_tuner.py --config config.yaml
    python tools/inspect_detection.py --config config.yaml
    ```
 

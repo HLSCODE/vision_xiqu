@@ -23,7 +23,7 @@ from control.ibvs import IBVSController
 from control.safety import SafetyManager
 from robot.realman_robot import RealRobot
 from suction.adp_suction import RealSuctionController
-from vision.detector import HSVObjectDetector
+from vision.detector import RGBObjectDetector
 
 
 TERMINAL_STATES = {
@@ -98,7 +98,7 @@ class ControlWorker(QThread):
             self.log_message.emit("正在加载 servo_A 和吸管轴线参考像素标定文件……")
             servo_A, suction_ref, calibration_metadata = load_runtime_calibration(self.config)
 
-            detector = HSVObjectDetector(
+            detector = RGBObjectDetector(
                 self.config.vision,
                 intrinsic_path=self.config.path(self.config.camera.intrinsic_path),
                 enable_undistort=self.config.camera.enable_undistort,

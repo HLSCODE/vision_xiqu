@@ -2,7 +2,7 @@
 
 本文件只负责任务编排，不直接调用任何厂商 SDK：
 
-1. 在固定观察位完成 HSV 全局检测与像素尺寸筛选；
+1. 在固定观察位完成 RGB 全局检测与像素尺寸筛选；
 2. 选定一个目标后，仅用最近邻规则跟踪该目标，并直接对准到吸管轴线参考点；
 3. 目标连续稳定对准后，停止 XY 并执行 Z 下降、吸取、抬升；
 4. 目标丢失、超时或安全异常时，停止运动并回到观察位重新检测。
@@ -26,7 +26,7 @@ from camera.opencv_camera import OpenCVCamera
 from control.ibvs import IBVSController
 from control.safety import SafetyManager, SafetyViolation
 from suction.base import SuctionController
-from vision.detector import HSVObjectDetector
+from vision.detector import RGBObjectDetector
 from vision.models import DetectedObject
 from vision.tracker import NearestNeighborTracker
 
@@ -45,7 +45,7 @@ class SuctionRobotController:
     Args:
         config: 所有运行参数，包括视觉、IBVS、Z 轴与安全限制。
         camera: 返回 BGR 图像帧的相机适配器。
-        detector: HSV 轮廓检测器。
+        detector: RGB 轮廓检测器。
         safety: 机器人动作的唯一安全入口。
         suction: 吸取执行器适配器；当前真实实现为 ADP 定量吸液枪。
         ibvs: 将像素误差转换为 XY 等效速度和位置微移的控制器。
@@ -57,7 +57,7 @@ class SuctionRobotController:
         self,
         config: AppConfig,
         camera: OpenCVCamera,
-        detector: HSVObjectDetector,
+        detector: RGBObjectDetector,
         safety: SafetyManager,
         suction: SuctionController,
         ibvs: IBVSController,
@@ -188,7 +188,7 @@ class SuctionRobotController:
         self.transition(SystemState.EMERGENCY_STOP, reason)
 
     def _get_detection(self) -> list[DetectedObject] | None:
-        """读取一帧并完成 HSV 检测。
+        """读取一帧并完成 RGB 检测。
 
         Returns:
             通过最小面积筛选的目标列表。相机单帧失败时返回 ``None``，

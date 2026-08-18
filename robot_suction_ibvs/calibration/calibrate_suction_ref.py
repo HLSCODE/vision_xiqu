@@ -27,7 +27,7 @@ from app.calibration_data import (
 )
 from app.config import load_config
 from camera.opencv_camera import OpenCVCamera
-from vision.detector import HSVObjectDetector
+from vision.detector import RGBObjectDetector
 
 
 def centre_and_jitter(samples: deque[np.ndarray]) -> tuple[np.ndarray, float]:
@@ -53,7 +53,7 @@ def main() -> int:
         raise ValueError("servo_A must have shape (2, 2)")
     validate_metadata_for_config(servo_metadata, config)
 
-    detector = HSVObjectDetector(
+    detector = RGBObjectDetector(
         config.vision,
         config.path(config.camera.intrinsic_path),
         config.camera.enable_undistort,
