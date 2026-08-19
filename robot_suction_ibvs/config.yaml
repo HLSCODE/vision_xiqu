@@ -97,7 +97,7 @@ robot:
   api_timeout_ms: 1000
   # 固定高位观察位：[x_mm,y_mm,z_mm,rx_rad,ry_rad,rz_rad]。
   # 当前值是占位值，必须用示教器移动到安全观察位后读取并替换。
-  observe_pose: [-0.300150, -0.376508, -0.180455, 3.046000, 0.040000, 0.245000]
+  observe_pose: [-300.150, -376.508, -180.455, 3.046000, 0.040000, 0.245000]
   # 观察位安全确认开关。false时适配器拒绝移动到观察位；实际示教核对后才能改为true。
   observe_pose_confirmed: true
   # 移动到观察位或通用位姿时的规划速度百分比，范围1~100，不是mm/s。
@@ -112,7 +112,7 @@ robot:
   # 固定观察高度，单位 mm。相对Z模式用它计算下降量，应与observe_pose中的z一致。
   observe_z_mm: -180.455
   # 吸取高度，单位 mm。absolute模式表示绝对Z；relative模式下与observe_z_mm做差得到下降量。
-  pick_z_mm:  -199.180
+  pick_z_mm:  -200.180
   # 吸取后的安全抬升高度，单位 mm。absolute模式表示绝对Z；relative模式用于计算抬升量。
   safe_z_mm:  -183.180
   # Z参数安全确认开关。false时适配器拒绝所有Z运动；实测三个高度并核对后才能改为true。
