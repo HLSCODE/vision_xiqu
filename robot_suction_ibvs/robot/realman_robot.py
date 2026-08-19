@@ -35,6 +35,11 @@ class RealRobot(RobotInterface):
     XY 视觉伺服使用 ``rm_movev_canfd``，速度参考系为当前工作坐标系。
     """
 
+    # API2 的轨迹状态在规划刚下发时可能短暂仍为“未运动”。因此不能只看
+    # trajectory_type；必须同时确认末端反馈已到达本次规划的目标位姿。
+    _POSITION_REACHED_TOLERANCE_MM = 0.5
+    _ORIENTATION_REACHED_TOLERANCE_RAD = 0.02
+
     def __init__(self, config: RobotConfig) -> None:
         self.config = config
         self._arm: Any | None = None
@@ -42,6 +47,7 @@ class RealRobot(RobotInterface):
         self._max_line_speed_m_s: float | None = None
         self._robot_info: dict[str, Any] | None = None
         self._last_planned_motion_at: float | None = None
+        self._last_planned_target_pose_mm: tuple[float, ...] | None = None
         self._motion_commanded = False
 
     @property
@@ -141,6 +147,7 @@ class RealRobot(RobotInterface):
             self._max_line_speed_m_s = None
             self._robot_info = None
             self._last_planned_motion_at = None
+            self._last_planned_target_pose_mm = None
             motion_commanded = self._motion_commanded
             self._motion_commanded = False
         if arm is None:
@@ -273,6 +280,7 @@ class RealRobot(RobotInterface):
         code = arm.rm_set_arm_stop()
         self._check_code("停止机械臂全部运动", code)
         self._last_planned_motion_at = None
+        self._last_planned_target_pose_mm = None
         self._motion_commanded = False
 
     def get_current_pose(self) -> Sequence[float]:
@@ -324,39 +332,54 @@ class RealRobot(RobotInterface):
         return int(trajectory.get("trajectory_type", 0)) != 0
 
     def wait_until_stop(self, timeout_s: float | None = None) -> None:
-        """等待规划运动结束，超时则停止机械臂并抛出异常。"""
+        """等待规划运动实际到达本次目标位姿，超时则停止并抛出异常。
+
+        不能只依赖 ``trajectory_type``：部分控制器在 ``rm_movel`` 刚受理时会
+        暂时返回未运动，旧逻辑因此会过早返回并导致状态机在 Z 尚未下降时吸液。
+        """
         timeout = self.config.motion_timeout_s if timeout_s is None else timeout_s
         deadline = None if timeout is None else time.monotonic() + float(timeout)
-        commanded_at = self._last_planned_motion_at
-        seen_moving = False
+        target_pose = self._last_planned_target_pose_mm
         while True:
             moving = self.is_moving()
-            seen_moving = seen_moving or moving
-            # 非阻塞指令刚返回时，控制器可能尚未来得及发布规划状态。
-            grace_elapsed = commanded_at is None or time.monotonic() - commanded_at >= 0.25
-            if not moving and (seen_moving or grace_elapsed):
+            current_pose = self.get_current_pose()
+            reached_target = target_pose is not None and self._is_pose_reached(
+                current_pose,
+                target_pose,
+            )
+            if not moving and reached_target:
                 self._last_planned_motion_at = None
+                self._last_planned_target_pose_mm = None
                 self._motion_commanded = False
                 return
             if deadline is not None and time.monotonic() >= deadline:
                 self.stop_all()
-                raise TimeoutError(f"等待机械臂停止超时：{timeout} 秒")
+                if target_pose is None:
+                    raise TimeoutError(f"等待机械臂停止超时：{timeout} 秒")
+                raise TimeoutError(
+                    f"等待机械臂到达规划目标超时：{timeout} 秒；"
+                    f"target={list(target_pose)!r}，current={list(current_pose)!r}，moving={moving}"
+                )
             time.sleep(0.05)
 
     def _move_joint_to_pose(self, pose: Sequence[float], speed_percent: int, operation: str) -> None:
         arm = self._require_connected()
-        sdk_pose = self._to_sdk_pose(pose)
+        target_pose = self._validate_pose(pose)
+        sdk_pose = self._to_sdk_pose(target_pose)
         code = arm.rm_movej_p(sdk_pose, self._percent(speed_percent), 0, 0, 0)
         self._check_code(operation, code)
         self._last_planned_motion_at = time.monotonic()
+        self._last_planned_target_pose_mm = tuple(target_pose)
         self._motion_commanded = True
 
     def _move_linear(self, pose: Sequence[float], speed_percent: int, operation: str) -> None:
         arm = self._require_connected()
-        sdk_pose = self._to_sdk_pose(pose)
+        target_pose = self._validate_pose(pose)
+        sdk_pose = self._to_sdk_pose(target_pose)
         code = arm.rm_movel(sdk_pose, self._percent(speed_percent), 0, 0, 0)
         self._check_code(operation, code)
         self._last_planned_motion_at = time.monotonic()
+        self._last_planned_target_pose_mm = tuple(target_pose)
         self._motion_commanded = True
 
     def _speed_percent(self, speed_mm_s: float) -> int:
@@ -370,12 +393,33 @@ class RealRobot(RobotInterface):
 
     @staticmethod
     def _to_sdk_pose(pose: Sequence[float]) -> list[float]:
+        values = RealRobot._validate_pose(pose)
+        return [values[0] / 1000.0, values[1] / 1000.0, values[2] / 1000.0, *values[3:]]
+
+    @staticmethod
+    def _validate_pose(pose: Sequence[float]) -> list[float]:
+        """Return one finite engineering-unit pose in mm/rad."""
         values = [float(value) for value in pose]
         if len(values) != 6:
             raise ValueError("机械臂位姿必须包含 6 个元素：[x_mm,y_mm,z_mm,rx,ry,rz]")
         if not all(math.isfinite(value) for value in values):
             raise ValueError("机械臂位姿包含 NaN 或无穷大")
-        return [values[0] / 1000.0, values[1] / 1000.0, values[2] / 1000.0, *values[3:]]
+        return values
+
+    @classmethod
+    def _is_pose_reached(cls, current: Sequence[float], target: Sequence[float]) -> bool:
+        """Check Cartesian feedback against an engineering-unit target pose."""
+        current_values = cls._validate_pose(current)
+        target_values = cls._validate_pose(target)
+        position_error_mm = math.dist(current_values[:3], target_values[:3])
+        orientation_errors = [
+            abs((actual - expected + math.pi) % (2.0 * math.pi) - math.pi)
+            for actual, expected in zip(current_values[3:], target_values[3:])
+        ]
+        return (
+            position_error_mm <= cls._POSITION_REACHED_TOLERANCE_MM
+            and max(orientation_errors, default=0.0) <= cls._ORIENTATION_REACHED_TOLERANCE_RAD
+        )
 
     @staticmethod
     def _percent(value: int) -> int:
