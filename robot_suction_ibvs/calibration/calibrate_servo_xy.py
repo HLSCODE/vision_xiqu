@@ -121,7 +121,7 @@ def fit_matrix(robot_offsets_mm: np.ndarray, pixel_offsets_px: np.ndarray) -> tu
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Simple 8-trial XY pixel/mm calibration")
-    parser.add_argument("--config", default="config.yaml")
+    parser.add_argument("--config", default="robot_suction_ibvs/config.yaml")
     parser.add_argument("--step-mm", type=float, default=2.0, help="Magnitude of every XY jog")
     parser.add_argument("--repeats", type=int, default=2, help="Trials for each of X-, X+, Y-, Y+")
     parser.add_argument("--frames", type=int, default=10, help="Stable frames averaged at each pose")

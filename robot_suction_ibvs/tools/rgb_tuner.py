@@ -24,7 +24,7 @@ def nothing(_: int) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Tune RGB segmentation using OpenCV trackbars")
-    parser.add_argument("--config", default="config.yaml")
+    parser.add_argument("--config", default="robot_suction_ibvs/config.yaml")
     parser.add_argument("--source", default=None, help="Optional device id, video path, or RTSP URL")
     parser.add_argument("--output", default="data/rgb_tuned.json", help="JSON file written after S is pressed")
     args = parser.parse_args()
@@ -50,6 +50,7 @@ def main() -> int:
     camera.open()
     print("Adjust sliders. Press S to save JSON, Q/Esc to exit.")
     try:
+       
         while True:
             frame = camera.get_frame()
             if frame is None:
@@ -59,6 +60,8 @@ def main() -> int:
             lower, upper = np.array(values[:3], dtype=np.uint8), np.array(values[3:], dtype=np.uint8)
             rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             mask = cv2.inRange(rgb, lower, upper)
+            cv2.namedWindow("BGR preview",cv2.WINDOW_FREERATIO)
+            cv2.namedWindow("RGB mask",cv2.WINDOW_FREERATIO)
             cv2.imshow("BGR preview", frame)
             cv2.imshow("RGB mask", mask)
             key = cv2.waitKey(1) & 0xFF
